@@ -1,12 +1,22 @@
-# Contributing
+# Contributing to peep
+
+Thanks for your interest! Bug reports, feature requests, and PRs are all welcome.
 
 ## Setup
 
 ```bash
+git clone https://github.com/atre/peep.git
+cd peep
 npm install
 npm run build
 npm link        # optional: makes `peep` available globally
 ```
+
+Requires Node.js 20+. The `whois` CLI binary is optional — peep falls back to
+RDAP when it's unavailable.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the scanner phases, correlation
+matrix, and DNS override fit together.
 
 ## Workflow
 
@@ -25,4 +35,8 @@ npm run lint     # tsc --noEmit
 
 ## Pull requests
 
-Keep PRs focused on one change. Add/update tests under `test/` for any behavior change, and make sure `npm test` and `npm run lint` pass.
+Keep PRs focused on one change. Add/update tests under `test/` for any behavior change, and make sure `npm test` and `npm run lint` pass. Keep the README's flag/scanner tables and `peep --help` in sync with any CLI change.
+
+## Reporting bugs
+
+Open an issue with the exact command, expected vs actual behavior, and your OS/Node version. For scan-result issues, include the `-j` JSON output (redact any domain you don't want public) and whether `-v` shows a scanner error.

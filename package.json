@@ -21,10 +21,20 @@
     "opsec",
     "fingerprint",
     "fleet",
-    "scanner"
+    "scanner",
+    "osint",
+    "correlation",
+    "security",
+    "cli",
+    "recon",
+    "attribution"
   ],
   "license": "MIT",
   "private": true,
+  "author": "Mykyta Herashchenko",
+  "files": [
+    "dist"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/atre/peep.git"

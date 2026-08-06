@@ -1,8 +1,29 @@
 # peep
 
+[![CI](https://github.com/atre/peep/actions/workflows/ci.yml/badge.svg)](https://github.com/atre/peep/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Fleet OPSEC scanner — fingerprint detection, grey-red classification, and cross-site correlation.
 
 Scans a fleet of domains for signals that could reveal common ownership: shared analytics IDs, favicon hashes, TLS SAN overlap, WHOIS registrant matches, DNS patterns, HTML structure fingerprints, and more. Classifies sites as adult ("red") or clean ("grey") and flags cross-cluster violations.
+
+**Zero runtime dependencies. One command. Exit codes built for CI.**
+
+```bash
+peep correlate          # Scan the fleet, score how linkable it is
+```
+
+## Features
+
+- **11 scanners across 3 phases** — DNS, HTTP, TLS, WHOIS, robots, HTML, analytics, assets, content, security headers, tech stack
+- **Cross-site correlation** — pairwise similarity matrix plus a fleet-wide isolation score (0-100)
+- **Grey-red classification** — weighted adult-content scoring with cross-cluster leak detection
+- **Commodity-signal discounting** — "any Cloudflare + Astro site" signals are weighted down, so unrelated brands on the same stack don't read as linked
+- **Deploy gate** — `peep check` returns exit 0/1 for CI, with a `--prelaunch` escape hatch
+- **Snapshot diffing** — `peep diff` tracks new/resolved findings and analytics drift between audits
+- **Derived SEO + security scores** — honest `null` instead of a fabricated 0 when a fetch fails
+- **DNS split-brain detection** — catches stale OS negative-cache entries that make a live domain look dead
+- **Zero runtime dependencies** — Node built-ins and global `fetch` only
 
 ## Requirements
 
@@ -13,7 +34,17 @@ No runtime npm dependencies. Uses only Node.js built-ins and the global `fetch` 
 
 ## Install
 
+Install straight from GitHub (not published to npm):
+
 ```bash
+npm install -g github:atre/peep
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/atre/peep.git
+cd peep
 npm install
 npm run build
 npm link        # makes `peep` available globally
@@ -192,6 +223,35 @@ Peep detects sites that are not yet indexable and marks them as `NOINDEX`. A sit
 
 `NOINDEX` status is shown prominently in `scan`, `fleet`, and `report` output. The `check` command will fail if the site is still `NOINDEX`.
 
+## Grey-red Classification
+
+Classification is a **weighted signal score**, not a machine-learning classifier.
+`content` collects signals from five sources:
+
+| Source | Detail |
+|---|---|
+| Body text | 66 keyword patterns (`src/patterns/adult-keywords.ts`), each tagged with a severity and one of 12 categories, matched against de-tagged HTML |
+| Domain name | The same patterns (excluding `low` severity) run against the hostname, so an adult domain with a clean landing page still scores |
+| Image `alt` text | Same patterns, `low` severity skipped |
+| Declared ratings | `<meta name="rating">` and the RTA label — both `critical` |
+| Networks | Affiliate links and ad-network scripts flagged `isAdult` in the pattern lists — `critical` |
+
+Each signal contributes by severity — `critical` 25, `high` 15, `medium` 5,
+`low` 1 — multiplied by a repetition weight (1× for a single mention, 1.5× at
+3+, 2× at 10+), summed, and capped at 100. A site is ADULT when the score meets
+`thresholds.adultScore` (default 30).
+
+A cluster whose name starts with `adult` (case-insensitive) is a red cluster.
+Adult signals on a site in any other cluster — including one not assigned to a
+cluster at all — raise a `critical` cross-cluster finding and exit 2.
+
+> **Limitation:** this is pattern matching without context. A page *about*
+> blocking adult content, a parental-control product, or a news article can
+> trip `critical` keywords and classify as ADULT. Since `check` gates deploys on
+> this, tune `thresholds.adultScore` for your fleet and treat a surprising
+> ADULT verdict as "inspect the signals" (`peep classify -v`) rather than
+> ground truth.
+
 ## Correlation
 
 The `correlate` and `report` commands compute a pairwise similarity matrix across all fleet domains. Findings are categorized by severity:
@@ -264,6 +324,28 @@ every other check (adult content, security score, critical errors) still
 gates normally. The flag is per-invocation only — it is never read from
 `.peeprc` — so it can't quietly keep passing after the site actually launches
 and someone forgets to remove noindex.
+
+## Scanning hostile targets
+
+peep's job is pointing itself at domains it doesn't control, so page content is
+treated as untrusted input:
+
+- **SSRF guard** — a scanned page controls its own `<link rel="icon">`,
+  stylesheet and `<script src>` values. Those subresource URLs are only fetched
+  when they resolve to a public address, so a page can't aim peep at
+  `169.254.169.254` (cloud metadata), `127.0.0.1`, or RFC1918 space. Non-HTTP
+  schemes (`file:`, `javascript:`, `data:`) are rejected outright. IPv4-mapped
+  IPv6 (`::ffff:127.0.0.1`) is unwrapped and judged by the embedded address.
+- **Target host stays trusted** — the guard only applies to URLs harvested from
+  page content. A subresource on the host you asked peep to scan is always
+  allowed, so `peep scan http://localhost:3000` against a local build works.
+- **Response size caps** — a timeout bounds how *long* a response may take, not
+  how much it may send. Bodies are read through a byte ceiling (10 MB for
+  pages, 5 MB for assets). Truncation is deterministic, so content hashes stay
+  comparable across domains.
+- **Bounded patterns** — extractor regexes use bounded spans instead of
+  unbounded `.*?`, so a crafted page can't drive quadratic matching and stall a
+  fleet scan.
 
 ## Configuration
 
