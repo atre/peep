@@ -128,3 +128,35 @@ test('Umami: two instances each get their own src', () => {
   assert.equal(entryA!.src, 'https://a.example.com/umami.js');
   assert.equal(entryB!.src, 'https://b.example.com/umami.js');
 });
+
+// ── Bounded-quantifier regressions ──
+// The extractor patterns use bounded spans ({0,200}) instead of unbounded `.*?`
+// so a hostile page can't drive quadratic matching. The bound must stay wide
+// enough to still cross a tag's attributes — narrowing it to exclude quotes
+// silently broke Plausible's data-domain detection once already.
+
+test('Plausible data-domain is still extracted across attributes', () => {
+  const html = `<script src="https://plausible.io/js/script.js" data-domain="mysite.com"></script>`;
+  const r = scanAnalytics(html);
+  assert.ok(r.plausible.includes('mysite.com'), `expected mysite.com, got ${JSON.stringify(r.plausible)}`);
+});
+
+test('Umami website id is still extracted across attributes', () => {
+  const html = `<script src="https://umami.is/script.js" data-website-id="12345678-1234-1234-1234-123456789abc"></script>`;
+  const r = scanAnalytics(html);
+  assert.ok(r.umami.some((u) => u.websiteId === '12345678-1234-1234-1234-123456789abc'));
+});
+
+test('GTM id is still extracted from a googletagmanager URL', () => {
+  const html = `<script src="https://www.googletagmanager.com/gtm.js?id=GTM-ABCD123"></script>`;
+  const r = scanAnalytics(html);
+  assert.ok(r.gtm.some((id) => id.includes('ABCD123')));
+});
+
+test('extractors stay fast on adversarial repetition', () => {
+  const blob = `<a href="exoclick.com zone juicyads.com spot hotjar.com plausible.io/js/ umami.is">`.repeat(20000);
+  const start = Date.now();
+  scanAnalytics(blob);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 3000, `analytics scan took ${elapsed}ms on adversarial input — quantifier may be unbounded`);
+});

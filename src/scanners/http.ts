@@ -1,4 +1,5 @@
 import type { HttpResult } from '../types.js';
+import { readCapped } from '../fetch-guard.js';
 import type { ScanningConfig } from '../types.js';
 import { origin } from '../utils.js';
 import { withResolverWarning } from '../resolver.js';
@@ -97,7 +98,7 @@ export async function scanHttp(domain: string, config: ScanningConfig): Promise<
   let body: string | null = null;
   try {
     if (response.ok || response.status < 400) {
-      body = await response.text();
+      body = await readCapped(response);
     }
   } catch {
     // Body read failed, downstream scanners will cope

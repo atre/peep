@@ -1,5 +1,26 @@
 import { shortHash } from '../utils.js';
+import { isFetchAllowed, readCapped, readCappedBuffer } from '../fetch-guard.js';
 import type { AssetResult, ScanningConfig } from '../types.js';
+
+/** Assets are fetched only to hash them — 5 MB is far past any real favicon/CSS/JS. */
+const MAX_ASSET_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Fetch a URL that came out of the scanned page's HTML. Returns null when the
+ * SSRF guard rejects it, so callers fall back to URL-based hashing.
+ */
+async function guardedFetch(
+  url: string,
+  targetHost: string,
+  config: ScanningConfig,
+): Promise<Response | null> {
+  const verdict = await isFetchAllowed(url, targetHost);
+  if (!verdict.allowed) return null;
+  return fetch(url, {
+    signal: AbortSignal.timeout(config.timeout),
+    headers: { 'User-Agent': config.userAgent },
+  });
+}
 
 export async function scanAssets(domain: string, html: string, config: ScanningConfig): Promise<AssetResult> {
   const result: AssetResult = {
@@ -18,12 +39,9 @@ export async function scanAssets(domain: string, html: string, config: ScanningC
   const faviconUrl = resolveUrl(domain, faviconHref, config.scheme);
   result.faviconUrl = faviconUrl;
   try {
-    const resp = await fetch(faviconUrl, {
-      signal: AbortSignal.timeout(config.timeout),
-      headers: { 'User-Agent': config.userAgent },
-    });
-    if (resp.ok) {
-      const buf = Buffer.from(await resp.arrayBuffer());
+    const resp = await guardedFetch(faviconUrl, domain, config);
+    if (resp?.ok) {
+      const buf = await readCappedBuffer(resp, MAX_ASSET_BYTES);
       result.faviconHash = shortHash(buf.toString('base64'));
     }
   } catch {}
@@ -101,7 +119,9 @@ function resolveUrl(domain: string, href: string, scheme?: 'https' | 'http'): st
   if (href.startsWith('http://') || href.startsWith('https://')) url = href;
   else if (href.startsWith('//')) url = `${base}:${href}`;
   else url = `${base}://${domain}${href.startsWith('/') ? '' : '/'}${href}`;
-  // Block non-HTTP schemes (javascript:, data:, file:, etc.) and private IPs
+  // Blocks non-HTTP schemes (javascript:, data:, file:, …). Private-address
+  // filtering is NOT done here — it needs DNS resolution, so it lives in the
+  // async guard in fetch-guard.ts that every fetch below goes through.
   if (!/^https?:\/\//i.test(url)) return `${base}://${domain}/invalid`;
   return url;
 }
@@ -114,12 +134,9 @@ async function hashFileContents(
   return Promise.all(urls.map(async (href) => {
     const url = resolveUrl(domain, href, config.scheme);
     try {
-      const resp = await fetch(url, {
-        signal: AbortSignal.timeout(config.timeout),
-        headers: { 'User-Agent': config.userAgent },
-      });
-      if (resp.ok) {
-        const text = await resp.text();
+      const resp = await guardedFetch(url, domain, config);
+      if (resp?.ok) {
+        const text = await readCapped(resp, MAX_ASSET_BYTES);
         return { url: href, hash: shortHash(text) };
       }
       return { url: href, hash: shortHash(href) };
@@ -138,11 +155,8 @@ async function fetchCssContents(
   return Promise.all(cssUrls.map(async (href) => {
     const url = resolveUrl(domain, href, config.scheme);
     try {
-      const resp = await fetch(url, {
-        signal: AbortSignal.timeout(config.timeout),
-        headers: { 'User-Agent': config.userAgent },
-      });
-      return { url: href, content: resp.ok ? await resp.text() : '' };
+      const resp = await guardedFetch(url, domain, config);
+      return { url: href, content: resp?.ok ? await readCapped(resp, MAX_ASSET_BYTES) : '' };
     } catch {
       return { url: href, content: '' };
     }

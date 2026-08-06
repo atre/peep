@@ -22,7 +22,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
     name: 'GTM Container',
     patterns: [
       /GTM-([A-Z0-9]{4,8})/g,
-      /googletagmanager\.com.*[?&]id=(GTM-[A-Z0-9]{4,8})/g,
+      /googletagmanager\.com[^<>]{0,200}?[?&]id=(GTM-[A-Z0-9]{4,8})/g,
     ],
     type: 'analytics',
   },
@@ -48,7 +48,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
     name: 'Umami Website ID',
     patterns: [
       /data-website-id=['"]([0-9a-f-]{36})['"]/g,
-      /umami\.(?:is|cloud).*?website-id=['"]([0-9a-f-]{36})['"]/g,
+      /umami\.(?:is|cloud)[^<>]{0,200}?website-id=['"]([0-9a-f-]{36})['"]/g,
     ],
     type: 'analytics',
   },
@@ -62,7 +62,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
   {
     name: 'Plausible Domain',
     patterns: [
-      /plausible\.io\/js\/.*?data-domain=['"]([^'"]+)['"]/g,
+      /plausible\.io\/js\/[^<>]{0,200}?data-domain=['"]([^'"]+)['"]/g,
       /src=['"]([^'"]*plausible[^'"]*\.js)['"]/g,
     ],
     type: 'analytics',
@@ -81,7 +81,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
     name: 'Facebook Pixel',
     patterns: [
       /fbq\(['"]init['"],\s*['"](\d{15,16})['"]/g,
-      /connect\.facebook\.net.*?\/(\d{15,16})\//g,
+      /connect\.facebook\.net[^<>]{0,200}?\/(\d{15,16})\//g,
     ],
     type: 'social',
   },
@@ -95,7 +95,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
   {
     name: 'Hotjar',
     patterns: [
-      /hotjar\.com.*?(\d{6,8})/g,
+      /hotjar\.com[^<>]{0,200}?(\d{6,8})/g,
       /hjid['":\s]+(\d{6,8})/g,
     ],
     type: 'analytics',
@@ -117,7 +117,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
   {
     name: 'ExoClick Zone',
     patterns: [
-      /exoclick\.com.*?zone(?:_id)?[=:]\s*['"]?(\d+)/gi,
+      /exoclick\.com[^<>]{0,200}?zone(?:_id)?[=:]\s*['"]?(\d+)/gi,
       /idzone\s*=\s*['"]?(\d+)/g,
     ],
     type: 'ads',
@@ -125,7 +125,7 @@ export const ANALYTICS_EXTRACTORS: AnalyticsExtractor[] = [
   {
     name: 'JuicyAds Spot',
     patterns: [
-      /juicyads\.com.*?spot[=:]\s*['"]?(\d+)/gi,
+      /juicyads\.com[^<>]{0,200}?spot[=:]\s*['"]?(\d+)/gi,
     ],
     type: 'ads',
   },
@@ -139,5 +139,5 @@ export const DNS_VERIFICATION_PATTERNS = [
   { name: 'Yandex Webmaster', pattern: /yandex-verification:\s*([a-f0-9]+)/i },
   { name: 'Adobe Domain', pattern: /adobe-idp-site-verification=([A-Za-z0-9_-]+)/ },
   { name: 'Atlassian Domain', pattern: /atlassian-domain-verification=([A-Za-z0-9_-]+)/ },
-  { name: 'Mailchimp DKIM', pattern: /k=rsa;.*?dkim\._domainkey/ },
+  { name: 'Mailchimp DKIM', pattern: /k=rsa;[\s\S]{0,500}?dkim\._domainkey/ },
 ];

@@ -1,3 +1,4 @@
+import { readCapped } from '../fetch-guard.js';
 import { scanDns } from './dns.js';
 import { scanHttp } from './http.js';
 import { scanTls } from './tls.js';
@@ -307,7 +308,7 @@ async function auditPages(
       audit.ok = resp.ok;
       if (!resp.ok) return audit;
 
-      const html = await resp.text();
+      const html = await readCapped(resp);
       const xRobotsTag = resp.headers.get('x-robots-tag');
       const pageHtml = scanHtml(html);
       const seo = scanSeo({
@@ -383,7 +384,7 @@ async function fetchSitemap(url: string, config: ScanningConfig): Promise<string
       headers: { 'User-Agent': config.userAgent },
     });
     if (!resp.ok) return null;
-    return await resp.text();
+    return await readCapped(resp);
   } catch {
     return null;
   }
@@ -437,7 +438,7 @@ async function scanExtraPages(
         headers: { 'User-Agent': config.userAgent, Accept: 'text/html' },
       });
       if (!resp.ok) return;
-      const html = await resp.text();
+      const html = await readCapped(resp);
       const pageResult = scanHtml(html);
       allEndpoints.push(...pageResult.formEndpoints);
     } catch {

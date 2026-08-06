@@ -1,5 +1,6 @@
 import { origin, shortHash } from '../utils.js';
 import type { RobotsResult, ScanningConfig } from '../types.js';
+import { readCapped } from '../fetch-guard.js';
 
 const AFFILIATE_REDIRECT_PATHS = ['/go/', '/out/', '/redirect/', '/aff/', '/refer/'];
 
@@ -24,7 +25,7 @@ export async function scanRobots(domain: string, config: ScanningConfig): Promis
         headers: { 'User-Agent': config.userAgent },
       });
       if (!resp.ok) return null;
-      const text = await resp.text();
+      const text = await readCapped(resp);
       // Guard against HTML error pages
       if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return null;
       return text;
