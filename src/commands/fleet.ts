@@ -1,7 +1,7 @@
 import { scanDomain } from '../scanners/index.js';
 import { mapConcurrent } from '../concurrency.js';
 import type { PeepConfig, ScanResult, OutputFormat } from '../types.js';
-import { c, formatDuration, getCluster, resolveScanningConfig } from '../utils.js';
+import { c, formatDuration, getCluster, resolveScanningConfig, isAdultCluster } from '../utils.js';
 
 export async function cmdFleet(
   config: PeepConfig,
@@ -63,7 +63,7 @@ export async function cmdFleet(
     const adultOnClean = results.filter((r) => {
       if (!r.content?.isAdult) return false;
       const cluster = getCluster(r.domain, config.fleet.clusters);
-      return cluster && !cluster.startsWith('adult');
+      return cluster && !isAdultCluster(cluster);
     });
     if (adultOnClean.length > 0) {
       console.error(`  ${c('red', `${adultOnClean.length} clean-cluster sites with adult content!`)}`);

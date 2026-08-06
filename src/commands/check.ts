@@ -1,6 +1,6 @@
 import { scanDomain } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
-import { c, getCluster, scoreColor } from '../utils.js';
+import { c, getCluster, scoreColor, isAdultCluster } from '../utils.js';
 
 const DEFAULT_SECURITY_THRESHOLD = 50;
 
@@ -35,7 +35,7 @@ export function evaluateCheck(
   const notes: string[] = [];
 
   const clusterName = opts.clusterOverride ?? getCluster(domain, clusters);
-  const isCleanCluster = clusterName && !clusterName.startsWith('adult');
+  const isCleanCluster = clusterName && !isAdultCluster(clusterName);
 
   // Check 1: no adult signals on clean cluster
   if (isCleanCluster && scanResult.content?.isAdult) {

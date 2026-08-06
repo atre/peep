@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
-import { normalizeDomain, shortHash, md5, sha256, strippedPath, writeOutputFile, scoreColor, resolveScanningConfig, oneClickDnssecProvider, parsePagesFlag } from '../src/utils.js';
+import { normalizeDomain, shortHash, md5, sha256, strippedPath, writeOutputFile, scoreColor, resolveScanningConfig, oneClickDnssecProvider, parsePagesFlag, isAdultCluster } from '../src/utils.js';
 import type { ScanningConfig } from '../src/types.js';
 
 test('oneClickDnssecProvider identifies Cloudflare NS (trailing dot tolerant)', () => {
@@ -192,3 +192,31 @@ test('sha256 known value', () => {
   assert.equal(sha256(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
 });
 
+
+// ── isAdultCluster ──
+// Regression: `cluster.startsWith('adult')` was case-sensitive at 7 call sites,
+// so a cluster named "Adult" read as clean — failing the deploy gate for
+// correctly-configured adult sites and raising spurious cross-cluster criticals.
+
+test('isAdultCluster matches regardless of case', () => {
+  for (const name of ['adult', 'Adult', 'ADULT', 'AdUlT']) {
+    assert.equal(isAdultCluster(name), true, `expected ${name} to be an adult cluster`);
+  }
+});
+
+test('isAdultCluster matches suffixed adult clusters', () => {
+  assert.equal(isAdultCluster('adult-2'), true);
+  assert.equal(isAdultCluster('Adult Cams'), true);
+});
+
+test('isAdultCluster tolerates surrounding whitespace', () => {
+  assert.equal(isAdultCluster('  adult  '), true);
+});
+
+test('isAdultCluster is false for clean clusters and nullish input', () => {
+  for (const name of ['clean', 'clean-1', 'Clean', 'grey', '']) {
+    assert.equal(isAdultCluster(name), false, `expected ${name} to be clean`);
+  }
+  assert.equal(isAdultCluster(null), false);
+  assert.equal(isAdultCluster(undefined), false);
+});

@@ -1,4 +1,5 @@
 import type { ScanResult, CorrelationFinding, Severity } from '../types.js';
+import { isAdultCluster } from '../utils.js';
 
 // WHOIS privacy placeholders — these appear on every privacy-protected domain
 // and must not be treated as a shared registrant signal
@@ -493,18 +494,20 @@ export function computeCorrelation(
   if (clusters) {
     const clusterMap = buildClusterMap(clusters);
     for (const r of results) {
-      const cluster = clusterMap.get(r.domain);
-      if (!cluster) continue;
+      // An unclustered domain is treated as clean rather than skipped: a site
+      // that's in the fleet but not yet assigned to a cluster is exactly the
+      // half-configured case where an adult leak is most likely to go unseen.
+      const cluster = clusterMap.get(r.domain) ?? '(unclustered)';
 
       // Check for adult content on clean cluster sites
-      if (!cluster.startsWith('adult') && r.content?.isAdult) {
+      if (!isAdultCluster(cluster) && r.content?.isAdult) {
         findings.push(finding('cross-cluster-adult', 'critical', [r.domain],
           `Adult content detected on clean-cluster site (score: ${r.content.adultScore})`,
           `${r.domain} is in cluster "${cluster}" but has adult signals`));
       }
 
       // Check for adult ad networks on clean sites
-      if (!cluster.startsWith('adult') && r.content?.adNetworks.some((a) => a.isAdult)) {
+      if (!isAdultCluster(cluster) && r.content?.adNetworks.some((a) => a.isAdult)) {
         const adultAds = r.content!.adNetworks.filter((a) => a.isAdult);
         findings.push(finding('cross-cluster-adult-ads', 'critical', [r.domain],
           `Adult ad network on clean site: ${adultAds.map((a) => a.name).join(', ')}`,
@@ -512,7 +515,7 @@ export function computeCorrelation(
       }
 
       // Check for adult affiliates on clean sites
-      if (!cluster.startsWith('adult') && r.content?.affiliateLinks.some((a) => a.isAdult)) {
+      if (!isAdultCluster(cluster) && r.content?.affiliateLinks.some((a) => a.isAdult)) {
         const adultAff = r.content!.affiliateLinks.filter((a) => a.isAdult);
         findings.push(finding('cross-cluster-adult-affiliate', 'critical', [r.domain],
           `Adult affiliate on clean site: ${adultAff.map((a) => a.network).join(', ')}`,

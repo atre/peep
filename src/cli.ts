@@ -2,6 +2,27 @@ import type { CliArgs } from './types.js';
 
 const COMMANDS = ['scan', 'fleet', 'correlate', 'classify', 'report', 'diff', 'check', 'help', 'version'] as const;
 
+/**
+ * Flags that never take a value. Without this list the parser has to guess from
+ * the shape of the next token, and any guess eats a domain: `peep scan -q
+ * example.com` parsed `example.com` as the value of `-q`, scanning nothing and
+ * silently disabling quiet mode at the same time.
+ */
+const BOOLEAN_FLAGS = new Set([
+  'skip-whois',
+  'skip-assets',
+  'hash-content',
+  'skip-content-hash',
+  'require-security-txt',
+  'prelaunch',
+  'verbose',
+  'quiet',
+  'json',
+]);
+
+/** Short flags that never take a value (mirrors BOOLEAN_FLAGS after shortMap expansion). */
+const BOOLEAN_SHORT = new Set(['j', 'q', 'v']);
+
 export function parseArgs(argv: string[]): CliArgs {
   const args = argv.slice(2);
   const command = args[0] && !args[0].startsWith('-') ? args[0] : 'help';
@@ -16,18 +37,16 @@ export function parseArgs(argv: string[]): CliArgs {
       const eqIdx = key.indexOf('=');
       if (eqIdx !== -1) {
         flags[key.slice(0, eqIdx)] = key.slice(eqIdx + 1);
+      } else if (BOOLEAN_FLAGS.has(key)) {
+        // Never consumes the next token, so a following domain stays a domain
+        flags[key] = true;
       } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-        // Peek: if next arg looks like a value, use it
         const next = args[i + 1];
-        if (next && !COMMANDS.includes(next as any) && !next.includes('.')) {
+        if (next && !COMMANDS.includes(next as any)) {
           flags[key] = next;
           i++;
-        } else if (next && next.includes('.') && key !== 'format' && key !== 'out' && key !== 'only' && key !== 'config' && key !== 'pages' && key !== 'dns') {
-          // Looks like a domain, not a flag value
-          flags[key] = true;
         } else {
-          flags[key] = args[i + 1];
-          i++;
+          flags[key] = true;
         }
       } else {
         flags[key] = true;
@@ -45,6 +64,9 @@ export function parseArgs(argv: string[]): CliArgs {
       const key = shortMap[arg[1]] ?? arg[1];
       if (key === 'json') {
         flags.format = 'json';
+      } else if (BOOLEAN_SHORT.has(arg[1])) {
+        // -q/-v are boolean: never swallow the following domain
+        flags[key] = true;
       } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
         flags[key] = args[i + 1];
         i++;

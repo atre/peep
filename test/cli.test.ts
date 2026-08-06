@@ -106,3 +106,44 @@ test('no command → help', () => {
   const r = parseArgs(args());
   assert.equal(r.command, 'help');
 });
+
+// ── Boolean flags must not swallow the following domain ──
+// Regression: `peep scan -q example.com` parsed example.com as the value of
+// -q, scanning nothing while also silently disabling quiet mode.
+
+test('-q before the domain does not swallow it', () => {
+  const r = parseArgs(args('scan', '-q', 'example.com'));
+  assert.equal(r.flags.quiet, true);
+  assert.deepEqual(r.domains, ['example.com']);
+});
+
+test('-v before multiple domains keeps all of them', () => {
+  const r = parseArgs(args('correlate', '-v', 'a.com', 'b.com'));
+  assert.equal(r.flags.verbose, true);
+  assert.deepEqual(r.domains, ['a.com', 'b.com']);
+});
+
+test('--skip-whois does not swallow a dotless target', () => {
+  const r = parseArgs(args('scan', '--skip-whois', 'my-lan-host'));
+  assert.equal(r.flags['skip-whois'], true);
+  assert.deepEqual(r.domains, ['my-lan-host']);
+});
+
+test('--skip-assets before a domain stays boolean', () => {
+  const r = parseArgs(args('scan', '--skip-assets', 'example.com'));
+  assert.equal(r.flags['skip-assets'], true);
+  assert.deepEqual(r.domains, ['example.com']);
+});
+
+test('--require-security-txt before a domain stays boolean', () => {
+  const r = parseArgs(args('check', '--require-security-txt', 'example.com'));
+  assert.equal(r.flags['require-security-txt'], true);
+  assert.deepEqual(r.domains, ['example.com']);
+});
+
+test('value-taking flags still consume their value before a domain', () => {
+  const r = parseArgs(args('scan', '--only', 'dns,tls', '--min-score', '70', 'example.com'));
+  assert.equal(r.flags.only, 'dns,tls');
+  assert.equal(r.flags['min-score'], '70');
+  assert.deepEqual(r.domains, ['example.com']);
+});

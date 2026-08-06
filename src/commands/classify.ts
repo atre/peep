@@ -1,7 +1,7 @@
 import { scanDomain } from '../scanners/index.js';
 import { mapConcurrent } from '../concurrency.js';
 import type { PeepConfig, OutputFormat } from '../types.js';
-import { c, severityColor, getCluster, writeOutputFile } from '../utils.js';
+import { c, severityColor, getCluster, writeOutputFile, isAdultCluster } from '../utils.js';
 
 export async function cmdClassify(
   domains: string[],
@@ -49,8 +49,17 @@ export async function cmdClassify(
     console.error(`\nClassification written to ${c('cyan', full)}`);
   }
 
+  // Violation count is needed for the exit code in every format, so compute it
+  // before the JSON early-return — `-j` used to always exit 0, silently
+  // passing any CI gate built on `peep classify`.
+  const violationDomains = output.filter((o) => {
+    const cluster = o.cluster;
+    return cluster != null && !isAdultCluster(cluster) && o.isAdult;
+  });
+
   if (format === 'json') {
     console.log(JSON.stringify(output, null, 2));
+    if (violationDomains.length > 0) process.exit(2);
     return;
   }
 
@@ -65,7 +74,7 @@ export async function cmdClassify(
     }
 
     const cluster = getCluster(r.domain, config.fleet.clusters);
-    const isCleanCluster = cluster && !cluster.startsWith('adult');
+    const isCleanCluster = cluster && !isAdultCluster(cluster);
     const label = cls.isAdult ? c('red', 'ADULT') : c('green', 'CLEAN');
     const scoreStr = `score: ${cls.adultScore}`;
     const clusterStr = cluster ? c('gray', `[${cluster}]`) : '';

@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, ScanResult, OutputFormat } from '../types.js';
-import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider } from '../utils.js';
+import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster } from '../utils.js';
 
 export async function cmdScan(
   domains: string[],
@@ -68,7 +68,7 @@ export async function cmdScan(
   const hasAdultOnClean = results.some((r) => {
     if (!r.content) return false;
     const cluster = getCluster(r.domain, config.fleet.clusters);
-    return cluster && !cluster.startsWith('adult') && r.content.isAdult;
+    return cluster && !isAdultCluster(cluster) && r.content.isAdult;
   });
 
   if (hasAdultOnClean) process.exit(2);

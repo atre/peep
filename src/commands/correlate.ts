@@ -42,15 +42,20 @@ export async function cmdCorrelate(
   } else {
     console.log(formatReportText(report));
 
-    // Exit code guidance
     if (report.summary.critical > 0) {
       console.log(c('red', `\nExit code 2: ${report.summary.critical} critical findings need immediate attention`));
-      process.exit(2);
     } else if (report.score < config.thresholds.correlationWarning) {
       console.log(c('yellow', `\nExit code 1: Isolation score ${report.score}/100 below warning threshold ${config.thresholds.correlationWarning}`));
-      process.exit(1);
     } else {
       console.log(c('green', `\nFleet isolation score: ${report.score}/100 — looks good`));
     }
+  }
+
+  // Gate outside the format branch: JSON is what CI consumes, so it must exit
+  // non-zero too. Previously `-j` always exited 0, silently passing any gate.
+  if (report.summary.critical > 0) {
+    process.exit(2);
+  } else if (report.score < config.thresholds.correlationWarning) {
+    process.exit(1);
   }
 }

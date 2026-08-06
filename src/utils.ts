@@ -165,3 +165,13 @@ export function getCluster(domain: string, clusters: Record<string, string[]>): 
   }
   return null;
 }
+
+/**
+ * A cluster is an adult ("red") cluster when its name starts with "adult".
+ * Case-insensitive on purpose: a `.peeprc` cluster named "Adult" used to read
+ * as clean, which both failed the deploy gate for correctly-configured adult
+ * sites and raised spurious cross-cluster criticals for them.
+ */
+export function isAdultCluster(cluster: string | null | undefined): boolean {
+  return cluster != null && cluster.trim().toLowerCase().startsWith('adult');
+}
