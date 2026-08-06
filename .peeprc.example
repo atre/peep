@@ -1,0 +1,21 @@
+{
+  "fleet": {
+    "domains": ["site-a.com", "site-b.com", "site-c.com", "site-d.com"],
+    "clusters": {
+      "clean-1": ["site-a.com", "site-b.com"],
+      "adult": ["site-c.com", "site-d.com"]
+    }
+  },
+  "thresholds": {
+    "adultScore": 30,
+    "correlationWarning": 40,
+    "correlationCritical": 70
+  },
+  "scanning": {
+    "concurrency": 5,
+    "timeout": 15000,
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "followRedirects": true,
+    "whoisEnabled": true
+  }
+}

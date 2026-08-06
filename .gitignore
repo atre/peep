@@ -1,0 +1,8 @@
+node_modules
+dist
+test-dist
+.peeprc
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+.claude/settings.json

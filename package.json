@@ -1,0 +1,43 @@
+{
+  "name": "peep",
+  "version": "0.1.0",
+  "description": "Fleet OPSEC scanner — fingerprint detection, grey-red classification, cross-site correlation",
+  "type": "module",
+  "bin": {
+    "peep": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prestart": "npm run build",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build",
+    "prelink": "npm run build",
+    "test": "tsc -p tsconfig.test.json && node --test test-dist/test/**/*.test.js",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "opsec",
+    "fingerprint",
+    "fleet",
+    "scanner"
+  ],
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atre/peep.git"
+  },
+  "homepage": "https://github.com/atre/peep#readme",
+  "bugs": {
+    "url": "https://github.com/atre/peep/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
+  }
+}

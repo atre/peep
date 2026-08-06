@@ -1,0 +1,123 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { evaluateCheck, type CheckGateOptions } from '../src/commands/check.js';
+import type { ScanResult } from '../src/types.js';
+
+function scan(over: Partial<ScanResult> = {}): ScanResult {
+  return {
+    domain: 'example.com',
+    url: 'https://example.com',
+    timestamp: new Date().toISOString(),
+    duration: 100,
+    isNoindex: false,
+    dns: null,
+    http: null,
+    tls: null,
+    whois: null,
+    html: null,
+    analytics: null,
+    assets: null,
+    robots: null,
+    content: null,
+    security: { score: 80, headers: [], formProviders: [] },
+    seo: null,
+    tech: null,
+    errors: [],
+    ...over,
+  };
+}
+
+function opts(over: Partial<CheckGateOptions> = {}): CheckGateOptions {
+  return {
+    clusterOverride: null,
+    securityThreshold: 50,
+    requireSecurityTxt: false,
+    expectNoindex: false,
+    ...over,
+  };
+}
+
+test('clean scan on a clean cluster, not noindex, good security → no failures', () => {
+  const r = evaluateCheck('example.com', scan(), {}, opts());
+  assert.deepEqual(r.failures, []);
+  assert.deepEqual(r.notes, []);
+});
+
+// ── Bug #3: pre-launch noindex escape hatch ──
+
+test('noindex without --expect/--prelaunch → fails, no note', () => {
+  const r = evaluateCheck('example.com', scan({ isNoindex: true }), {}, opts());
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0], /NOINDEX/);
+  assert.deepEqual(r.notes, []);
+});
+
+test('noindex with expectNoindex → converts to a note, never a failure', () => {
+  const r = evaluateCheck('example.com', scan({ isNoindex: true }), {}, opts({ expectNoindex: true }));
+  assert.deepEqual(r.failures, [], 'a declared pre-launch noindex must not fail the gate');
+  assert.deepEqual(r.notes, ['noindex (declared pre-launch)']);
+});
+
+test('expectNoindex on a site that is NOT noindex → no-op, no phantom note', () => {
+  const r = evaluateCheck('example.com', scan({ isNoindex: false }), {}, opts({ expectNoindex: true }));
+  assert.deepEqual(r.failures, []);
+  assert.deepEqual(r.notes, [], 'the escape hatch must not fabricate a note when there is nothing to excuse');
+});
+
+test('expectNoindex does not mask unrelated failures (e.g. low security score)', () => {
+  const r = evaluateCheck(
+    'example.com',
+    scan({ isNoindex: true, security: { score: 10, headers: [], formProviders: [] } }),
+    {},
+    opts({ expectNoindex: true, securityThreshold: 50 }),
+  );
+  assert.deepEqual(r.notes, ['noindex (declared pre-launch)']);
+  assert.equal(r.failures.length, 1, 'the noindex failure is excused, but a genuinely low security score still fails');
+  assert.match(r.failures[0], /Security score/);
+});
+
+// ── Existing gate checks (unchanged by the pre-launch feature) ──
+
+test('adult content on a clean cluster fails', () => {
+  const r = evaluateCheck(
+    'example.com',
+    scan({ content: { isAdult: true, adultScore: 90, signals: [], affiliateLinks: [], adNetworks: [], contentRating: null } }),
+    { clean: ['example.com'] },
+    opts(),
+  );
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0], /Adult content/);
+});
+
+test('adult content on an adult cluster does not fail', () => {
+  const r = evaluateCheck(
+    'example.com',
+    scan({ content: { isAdult: true, adultScore: 90, signals: [], affiliateLinks: [], adNetworks: [], contentRating: null } }),
+    { adult: ['example.com'] },
+    opts(),
+  );
+  assert.deepEqual(r.failures, []);
+});
+
+test('security score below threshold fails', () => {
+  const r = evaluateCheck('example.com', scan({ security: { score: 30, headers: [], formProviders: [] } }), {}, opts({ securityThreshold: 50 }));
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0], /Security score 30\/100/);
+});
+
+test('--require-security-txt fails when absent', () => {
+  const r = evaluateCheck('example.com', scan({ robots: { robotsTxt: null, robotsTxtHash: null, sitemapUrls: [], sitemapHash: null, affiliateRedirectPaths: [], adsTxt: null, adsTxtHash: null, adsTxtPubIds: [], securityTxt: null, humansTxt: null } }), {}, opts({ requireSecurityTxt: true }));
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0], /security\.txt/);
+});
+
+test('critical scanner errors (dns/http/tls) fail the gate', () => {
+  const r = evaluateCheck('example.com', scan({ errors: [{ scanner: 'http', error: 'getaddrinfo ENOTFOUND example.com' }] }), {}, opts());
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0], /Critical scanner error \[http\]/);
+});
+
+test('non-critical scanner errors (e.g. whois) do not fail the gate', () => {
+  const r = evaluateCheck('example.com', scan({ errors: [{ scanner: 'whois', error: 'timeout' }] }), {}, opts());
+  assert.deepEqual(r.failures, []);
+});
