@@ -80,3 +80,51 @@ test('adultScore is a number >= 0', () => {
   assert.ok(typeof r.adultScore === 'number');
   assert.ok(r.adultScore >= 0);
 });
+
+// ── Domain-name classification ──
+// Regression: the `domain` argument was accepted and never read, so an adult
+// hostname with a clean landing page scored 0.
+
+test('adult keyword in the domain name is scored', () => {
+  const r = scanContent(CLEAN_HTML, 'xxx-cams.com');
+  assert.ok(r.adultScore > 0, `expected a non-zero score, got ${r.adultScore}`);
+  assert.ok(r.signals.some((s) => s.type === 'domain_name'));
+});
+
+test('clean domain with clean HTML still scores 0', () => {
+  const r = scanContent(CLEAN_HTML, 'example.com');
+  assert.equal(r.adultScore, 0);
+  assert.equal(r.isAdult, false);
+});
+
+test('hyphen/dot separated domain keywords are detected', () => {
+  const r = scanContent(CLEAN_HTML, 'live.cam-show.net');
+  assert.ok(r.signals.some((s) => s.type === 'domain_name'));
+});
+
+test('domain-name signals do not stack beyond one', () => {
+  const r = scanContent(CLEAN_HTML, 'porn-xxx-hentai-cam.com');
+  assert.equal(r.signals.filter((s) => s.type === 'domain_name').length, 1);
+});
+
+// ── Repetition weighting ──
+
+test('repeated keyword hits score higher than a single mention', () => {
+  const once = `<html><body><p>A mention of xxx here.</p></body></html>`;
+  const many = `<html><body><p>${'xxx '.repeat(15)}</p></body></html>`;
+  const rOnce = scanContent(once, 'example.com');
+  const rMany = scanContent(many, 'example.com');
+  assert.ok(rMany.adultScore > rOnce.adultScore,
+    `expected repeated hits to outscore a single mention (${rMany.adultScore} vs ${rOnce.adultScore})`);
+});
+
+test('score stays capped at 100', () => {
+  const saturated = `<html><body><p>${'porn xxx hentai nsfw '.repeat(200)}</p></body></html>`;
+  const r = scanContent(saturated, 'example.com');
+  assert.ok(r.adultScore <= 100, `score exceeded cap: ${r.adultScore}`);
+});
+
+test('score is always an integer', () => {
+  const r = scanContent(`<html><body><p>${'xxx '.repeat(5)}</p></body></html>`, 'example.com');
+  assert.equal(Number.isInteger(r.adultScore), true, `got non-integer: ${r.adultScore}`);
+});

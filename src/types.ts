@@ -118,10 +118,12 @@ export interface RobotsResult {
 }
 
 export interface ContentSignal {
-  type: 'keyword' | 'affiliate' | 'ad_network' | 'meta_rating' | 'rta_label' | 'link' | 'image_alt';
+  type: 'keyword' | 'affiliate' | 'ad_network' | 'meta_rating' | 'rta_label' | 'link' | 'image_alt' | 'domain_name';
   value: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
   location: string;
+  /** Score multiplier for repeated hits (1 = single mention). Defaults to 1 when absent. */
+  weight?: number;
 }
 
 export interface DetectedAffiliate {

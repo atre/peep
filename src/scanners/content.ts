@@ -3,6 +3,29 @@ import { AFFILIATE_NETWORKS, INTERNAL_REDIRECT_PATTERNS } from '../patterns/affi
 import { AD_NETWORKS, PUSH_NETWORKS } from '../patterns/ad-networks.js';
 import type { ContentClassification, ContentSignal, DetectedAffiliate, DetectedAd } from '../types.js';
 
+/**
+ * Keyword regexes are compiled once at module load, not per call. They used to
+ * be rebuilt inside the alt-text loop, so a 100-image page cost ~6,600
+ * `new RegExp()` constructions per scan.
+ *
+ * `GLOBAL_*` carry the `g` flag for counting occurrences; `SINGLE_*` are for
+ * one-shot tests. They must stay separate — a `g` regex carries `lastIndex`
+ * state across `.test()` calls and would skip matches.
+ */
+const GLOBAL_KEYWORD_RES = ADULT_KEYWORDS.map((kw) => new RegExp(kw.pattern.source, 'gi'));
+const SINGLE_KEYWORD_RES = ADULT_KEYWORDS.map((kw) => new RegExp(kw.pattern.source, 'i'));
+
+/**
+ * Repeated hits mean more than a single passing mention, but with diminishing
+ * returns — one "xxx" in a footer disclaimer should not score the same as a
+ * page saturated with it, and 500 hits should not outweigh everything else.
+ */
+function repetitionWeight(count: number): number {
+  if (count >= 10) return 2;
+  if (count >= 3) return 1.5;
+  return 1;
+}
+
 export function scanContent(html: string, domain: string, adultScoreThreshold = 30): ContentClassification {
   const signals: ContentSignal[] = [];
   const affiliateLinks: DetectedAffiliate[] = [];
@@ -13,23 +36,44 @@ export function scanContent(html: string, domain: string, adultScoreThreshold = 
   const altTexts = extractAlts(html);
 
   // ── Keyword scanning ──
-  for (const kw of ADULT_KEYWORDS) {
-    const matches = text.match(new RegExp(kw.pattern.source, 'gi'));
+  for (let i = 0; i < ADULT_KEYWORDS.length; i++) {
+    const kw = ADULT_KEYWORDS[i];
+    const matches = text.match(GLOBAL_KEYWORD_RES[i]);
     if (matches && matches.length > 0) {
       signals.push({
         type: 'keyword',
         value: `${matches[0]} (×${matches.length})`,
         severity: kw.severity,
         location: `body text [${kw.category}]`,
+        weight: repetitionWeight(matches.length),
       });
+    }
+  }
+
+  // ── Domain-name keywords ──
+  // The domain itself is content: a clean landing page on an obviously adult
+  // hostname should not classify as clean.
+  for (let i = 0; i < ADULT_KEYWORDS.length; i++) {
+    const kw = ADULT_KEYWORDS[i];
+    if (kw.severity === 'low') continue; // too noisy against a short hostname
+    const hostname = domain.replace(/[.-]/g, ' ');
+    if (SINGLE_KEYWORD_RES[i].test(hostname)) {
+      signals.push({
+        type: 'domain_name',
+        value: domain,
+        severity: kw.severity,
+        location: `domain name [${kw.category}]`,
+      });
+      break; // one domain-name signal is enough; don't stack them
     }
   }
 
   // Check alt texts separately
   for (const alt of altTexts) {
-    for (const kw of ADULT_KEYWORDS) {
+    for (let i = 0; i < ADULT_KEYWORDS.length; i++) {
+      const kw = ADULT_KEYWORDS[i];
       if (kw.severity === 'low') continue; // skip low-severity for alt text
-      if (new RegExp(kw.pattern.source, 'i').test(alt)) {
+      if (SINGLE_KEYWORD_RES[i].test(alt)) {
         signals.push({
           type: 'image_alt',
           value: alt.slice(0, 60),
@@ -165,10 +209,10 @@ function calculateAdultScore(signals: ContentSignal[]): number {
   const weights = { critical: 25, high: 15, medium: 5, low: 1 };
 
   for (const signal of signals) {
-    score += weights[signal.severity];
+    score += weights[signal.severity] * (signal.weight ?? 1);
   }
 
-  return Math.min(100, score);
+  return Math.min(100, Math.round(score));
 }
 
 function htmlToText(html: string): string {
