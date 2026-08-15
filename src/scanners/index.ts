@@ -4,14 +4,14 @@ import { scanHttp } from './http.js';
 import { scanTls } from './tls.js';
 import { scanWhois } from './whois.js';
 import { scanHtml } from './html.js';
-import { scanAnalytics } from './analytics.js';
+import { scanAnalytics, mergeAnalytics } from './analytics.js';
 import { scanAssets } from './assets.js';
 import { scanRobots } from './robots.js';
 import { scanContent } from './content.js';
 import { scanSecurity } from './security.js';
 import { scanSeo } from './seo.js';
 import { scanTech } from './tech.js';
-import type { ScanResult, ScanningConfig, RobotsResult, PageAudit, HreflangAlternate } from '../types.js';
+import type { ScanResult, ScanningConfig, RobotsResult, PageAudit, HreflangAlternate, AnalyticsResult } from '../types.js';
 
 export interface ScanOptions {
   config: ScanningConfig;
@@ -227,7 +227,9 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
   // Multi-page scanning: fetch top N sitemap pages and merge form endpoints
   if (opts.pages && opts.pages > 0 && result.robots?.sitemapUrls.length) {
     try {
-      const extraEndpoints = await scanExtraPages(domain, result.robots.sitemapUrls, opts.pages, opts.config);
+      const extra = await scanExtraPages(domain, result.robots.sitemapUrls, opts.pages, opts.config, result.analytics != null);
+      const extraEndpoints = extra.formEndpoints;
+      if (result.analytics) for (const a of extra.analytics) mergeAnalytics(result.analytics, a);
       if (result.html && extraEndpoints.length > 0) {
         const existing = new Set(result.html.formEndpoints);
         for (const ep of extraEndpoints) {
@@ -247,8 +249,9 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
   // also merged into correlation, same as the sitemap crawl above.
   if (opts.pageRoutes?.length) {
     try {
-      const audits = await auditPages(domain, opts.pageRoutes, result.robots, opts.config);
+      const { audits, analytics: pageAnalytics } = await auditPages(domain, opts.pageRoutes, result.robots, opts.config, result.analytics != null);
       result.pageAudits = audits;
+      if (result.analytics) for (const a of pageAnalytics) mergeAnalytics(result.analytics, a);
       if (result.html) {
         const existing = new Set(result.html.formEndpoints);
         for (const a of audits) {
@@ -300,8 +303,10 @@ async function auditPages(
   routes: string[],
   robots: RobotsResult | null,
   config: ScanningConfig,
-): Promise<PageAudit[]> {
-  return Promise.all(routes.map(async (route) => {
+  wantAnalytics = true,
+): Promise<{ audits: PageAudit[]; analytics: AnalyticsResult[] }> {
+  const analytics: AnalyticsResult[] = [];
+  const audits = await Promise.all(routes.map(async (route) => {
     const url = resolvePageUrl(domain, route, config.scheme);
     const audit: PageAudit = {
       route, url, statusCode: null, ok: false, title: null, htmlLang: null,
@@ -338,11 +343,13 @@ async function auditPages(
       audit.seoScore = seo.score;
       audit.seoIssues = seo.checks.filter((ch) => ch.rating !== 'good');
       audit.formEndpoints = pageHtml.formEndpoints;
+      if (wantAnalytics) analytics.push(scanAnalytics(html));
     } catch {
       // Individual route fetch failed — return the shell with ok=false.
     }
     return audit;
   }));
+  return { audits, analytics };
 }
 
 /** Most child sitemaps to follow from a <sitemapindex> before giving up. */
@@ -432,15 +439,18 @@ async function scanExtraPages(
   sitemapUrls: string[],
   maxPages: number,
   config: ScanningConfig,
-): Promise<string[]> {
+  wantAnalytics = true,
+): Promise<{ formEndpoints: string[]; analytics: AnalyticsResult[] }> {
+  const empty = { formEndpoints: [], analytics: [] };
   const sitemapUrl = sitemapUrls[0];
-  if (!sitemapUrl) return [];
+  if (!sitemapUrl) return empty;
 
   const pageUrls = await collectSitemapPageUrls(sitemapUrl, domain, maxPages, config);
-  if (pageUrls.length === 0) return [];
+  if (pageUrls.length === 0) return empty;
 
-  // Fetch pages in parallel and extract form endpoints
+  // Fetch pages in parallel and extract form endpoints + tracking IDs
   const allEndpoints: string[] = [];
+  const analytics: AnalyticsResult[] = [];
   await Promise.all(pageUrls.map(async (url) => {
     try {
       const resp = await fetch(url, {
@@ -451,10 +461,11 @@ async function scanExtraPages(
       const html = await readCapped(resp);
       const pageResult = scanHtml(html);
       allEndpoints.push(...pageResult.formEndpoints);
+      if (wantAnalytics) analytics.push(scanAnalytics(html));
     } catch {
       // Individual page fetch failed — skip
     }
   }));
 
-  return allEndpoints;
+  return { formEndpoints: allEndpoints, analytics };
 }

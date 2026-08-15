@@ -52,6 +52,10 @@ const FLEET_WIDE_TYPES = new Set([
   'shared-facebook-verification',
   'shared-ads-txt-pubid',
   'shared-affiliate-redirect-path',
+  'report-address-on-fleet-domain',
+  'spf-references-fleet-domain',
+  'shared-report-mailbox',
+  'shared-caa-account',
 ]);
 
 const SEVERITY_PENALTY: Record<string, number> = { critical: 25, high: 10, medium: 5, low: 2 };

@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, ScanResult, OutputFormat, RobotsTxtSummary, SecurityTxtSummary } from '../types.js';
-import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
+import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster, describeHttpStatus, isErrorStatus, emailAuthChecks } from '../utils.js';
 
 export async function cmdScan(
   domains: string[],
@@ -100,6 +100,15 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     if (result.dns.ns.length) console.log(`    NS: ${result.dns.ns.join(', ')}`);
     if (result.dns.txt.length) console.log(`    TXT: ${result.dns.txt.join(', ')}`);
     if (result.dns.cname.length) console.log(`    CNAME: ${result.dns.cname.join(', ')}`);
+    if (result.dns.caa?.length) console.log(`    CAA: ${result.dns.caa.join(', ')}`);
+    const email = emailAuthChecks(result.dns);
+    if (email) {
+      for (const e of email) {
+        const icon = e.rating === 'good' ? c('green', '+') : e.rating === 'missing' || e.rating === 'bad' ? c('red', '-') : c('yellow', '~');
+        const detail = e.rating === 'good' ? c('dim', e.detail) : c('yellow', e.detail);
+        console.log(`    ${icon} ${e.name}: ${e.value} ${c('dim', '—')} ${detail}`);
+      }
+    }
   }
 
   // HTTP
@@ -266,6 +275,9 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     for (const h of result.security.headers) {
       const icon = h.rating === 'good' ? c('green', '+') : h.rating === 'warning' ? c('yellow', '~') : h.rating === 'missing' ? c('dim', '-') : c('red', '!');
       console.log(`    ${icon} ${h.name}: ${h.detail}`);
+    }
+    if (result.security.reportEndpoints?.length) {
+      console.log(`    ${c('cyan', '◆')} Report collectors (CSP/NEL): ${result.security.reportEndpoints.join(', ')}`);
     }
     if (result.security.formProviders.length) {
       console.log(`    ${c('cyan', '◆')} Form/booking providers (CSP): ${result.security.formProviders.join(', ')}`);

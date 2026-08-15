@@ -16,6 +16,8 @@ peep correlate          # Scan the fleet, score how linkable it is
 ## Features
 
 - **11 scanners across 3 phases** — DNS, HTTP, TLS, WHOIS, robots, HTML, analytics, assets, content, security headers, tech stack
+- **Third-party account IDs** — 40+ vendor keys (Stripe, PayPal, Meta/TikTok/LinkedIn pixels, Sentry, reCAPTCHA, Intercom, HubSpot, Shopify, …) plus 50+ DNS TXT verification tokens; a shared key is a shared account
+- **Email OPSEC** — SPF / DMARC / CAA parsed and judged (spoofable? report mailbox shared with another site?), with `check --require-email-auth`
 - **Cross-site correlation** — pairwise similarity matrix plus a fleet-wide isolation score (0-100)
 - **Grey-red classification** — weighted adult-content scoring with cross-cluster leak detection
 - **Commodity-signal discounting** — "any Cloudflare + Astro site" signals are weighted down, so unrelated brands on the same stack don't read as linked
@@ -151,6 +153,7 @@ peep check example.com --cluster clean
 | `--cluster <name>` | | Cluster context for `check` command (`clean` or `adult`) |
 | `--min-score <n>` | | Minimum security score for `check` command (default: 50) |
 | `--require-security-txt` | | Fail `check` if `security.txt` is absent |
+| `--require-email-auth` | | Fail `check` unless SPF is published with a `-all`/`~all` terminal and DMARC with `p=quarantine\|reject` — a transactional-mail domain without them is spoofable and lands in spam |
 | `--expect <state>` | | `check` only. `--expect noindex` (alias `--prelaunch`) converts a noindex failure into a PASS annotated `noindex (declared pre-launch)` — for a site that's public for a payment-provider review but deliberately kept noindex until go-live. Must be passed explicitly per invocation, never a `.peeprc` default, so it can't mask a forgotten noindex after launch |
 | `--dns <server>` | | Pin DNS resolution to this server (e.g. `1.1.1.1`) instead of the OS resolver — see [DNS Resolution](#dns-resolution) |
 
@@ -165,16 +168,16 @@ Peep runs 11 scanners across three phases, plus two derived scores (`seo`, `secu
 
 | Scanner | What it checks |
 |---|---|
-| `dns` | A, AAAA, MX, TXT, NS, CNAME records; Google/Bing/Facebook verification tokens |
+| `dns` | A, AAAA, MX, TXT, NS, CNAME, CAA records; Google/Bing/Facebook verification tokens; parsed SPF (`include:`, `ip4:`/`ip6:`, terminal `all`) and `_dmarc` (policy, `rua`/`ruf` mailboxes) with a spoofability verdict (`+ SPF: -all …` / `- DMARC: none — spoofed mail is still delivered`) |
 | `http` | Status, headers, timing, full redirect chain (manual hop-by-hop, max 10), cookies, X-Robots-Tag |
 | `tls` | Certificate issuer, SAN list, protocol, cipher, expiry |
 | `whois` | Registrar, registrant org, creation/expiration dates (RDAP fallback for .dev, .app, etc.) |
 | `html` | Title, meta/OG tags, Twitter card tags (`twitter:card`, `twitter:image`, etc.), JSON-LD structured data (`@type`, `name`, `sameAs` for cross-site correlation), canonical URL, structure hashes, inline script/style hashes, comments, form/booking endpoints (Formspree, Calendly, Typeform, Tally, etc.); `metaRobots` for noindex detection |
-| `analytics` | GA4, GTM, AdSense, Umami (websiteId), Facebook Pixel, Clarity, Plausible, Cloudflare Analytics, Hotjar, Matomo, ExoClick, JuicyAds; DNS verification tokens |
+| `analytics` | GA4, GTM, AdSense, Google Ads conversion, Umami (websiteId), Facebook Pixel, Clarity, Plausible, Cloudflare Analytics, Hotjar, Matomo, ExoClick, JuicyAds; TikTok / LinkedIn / Pinterest / Snap / X / Reddit pixels, Bing UET, Yandex Metrika; Segment, Mixpanel, Amplitude, PostHog, Sentry (org + DSN key), OneSignal; Stripe publishable key, PayPal client id, Shopify store, Klaviyo, Mailchimp account, Trustpilot; Intercom, Crisp, Tawk.to, HubSpot portal, Cookiebot, Disqus; Webflow site, Firebase project, Google API key, reCAPTCHA / hCaptcha / Turnstile site keys, Adobe Launch. 50+ DNS TXT verification tokens (Google, Facebook, Apple, Stripe, DocuSign, Atlassian, Notion, OpenAI, HubSpot, Zoho, Calendly, Shopify, …) land as `DNS:<vendor>`. With `--pages`, IDs found on subpages (checkout, contact, booking) are merged in — that's where Stripe keys and captcha site keys live |
 | `assets` | Favicon hash, CSS/JS file hashes (URL-based or content-based with `--hash-content`), font families/sources (including CSS `@font-face`), image count (`<img>` + inline `<svg>` + CSS `background-image`), OG/Twitter card images |
 | `robots` | `robots.txt` (blocked agents, `Disallow /`, disallow paths) + affiliate redirect path detection (`/go/`, `/out/`, `/aff/`, etc.); `ads.txt` pub-id parsing; `security.txt` (contacts, `Expires` with RFC 9116 <1y check, PGP signature); `humans.txt`; sitemap URLs |
 | `content` | Adult keyword scoring (configurable threshold), meta rating, RTA label, affiliate network detection (adult + clean), ad network detection |
-| `security` | Security headers score (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP, COEP, CORP, security.txt, server version disclosure). Informational checks: CORS `Access-Control-Allow-Origin: *` wildcard, HTML comments OPSEC warning (framework markers such as React/Next `<!--$-->` hydration boundaries are ignored), CSP script allowlist cross-reference (scripts loaded from origins not in `script-src`). Also extracts form/booking providers declared in CSP (`calendly.com`, `formspree.io`, …) for fleet correlation |
+| `security` | Security headers score (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP, COEP, CORP, security.txt, server version disclosure). Informational checks: CORS `Access-Control-Allow-Origin: *` wildcard, HTML comments OPSEC warning (framework markers such as React/Next `<!--$-->` hydration boundaries are ignored), CSP script allowlist cross-reference (scripts loaded from origins not in `script-src`). Also extracts form/booking providers declared in CSP (`calendly.com`, `formspree.io`, …) and violation-report collectors (CSP `report-uri`, `Report-To`, `Reporting-Endpoints` — e.g. `<account>.report-uri.com`, Sentry ingest) for fleet correlation |
 | `tech` | Stack fingerprinting: frameworks (Next.js, Nuxt, Astro, Gatsby, Hugo, WordPress, etc.), CSS (Tailwind CSS via utility class analysis), CDNs (Cloudflare, Vercel, Netlify, AWS CloudFront), hosting (GitHub Pages, Cloudflare Pages — boosted by CNAME to `*.pages.dev`), servers (Nginx, Apache, Caddy), monitoring (NEL/Report-To network error logging) |
 | `seo` *(derived)* | SEO score over `html` + `robots`: title, meta description, canonical, Open Graph, Twitter card, language, viewport, JSON-LD, robots.txt, sitemap, hreflang, HTTPS. Addressable via `--only seo` (runs its source scanners); checks whose source scanner didn't actually produce a result — not selected under a partial `--only`, *or* selected but its fetch failed — are reported as *not evaluated* rather than failing, and the score itself is `null` ("not evaluated") rather than a fabricated 0 or 100 when nothing at all was evaluated |
 
@@ -258,14 +261,14 @@ The `correlate` and `report` commands compute a pairwise similarity matrix acros
 
 | Severity | Examples |
 |---|---|
-| **critical** | Shared GA4/AdSense/GTM/Umami ID, TLS SAN covering both domains, adult content on clean site, shared Google/Bing/Facebook DNS verification tokens |
-| **high** | Shared favicon hash, same IP (cross-cluster), shared registrant org, identical ads.txt, shared ads.txt pub-ids across clusters, shared JSON-LD `sameAs` URLs, shared JS content hashes (cross-cluster), shared form/booking endpoints (Formspree, Calendly, etc.) |
-| **medium** | Shared MX records (cross-cluster), registration dates within 7 days, shared meta generator (cross-cluster), shared affiliate redirect paths across clusters, shared CSS content hashes (cross-cluster), shared `twitter:site` handle, shared form/booking provider declared in CSP (Calendly/Formspree, fleet-wide or pairwise) |
-| **low** | Shared nameservers, shared robots.txt hash, shared font sources, shared sitemap URL patterns, shared IP (same cluster), shared MX/head structure/generator/CSS/JS (same cluster — downgraded) |
+| **critical** | Shared GA4/AdSense/GTM/Umami ID, shared Facebook pixel, shared Plausible `data-domain`, shared account-level vendor key (Stripe, PayPal, Google Ads, Mailchimp, Shopify store, Sentry DSN, TikTok/LinkedIn/Pinterest/Snap/X/Reddit pixel, Bing UET, Yandex, Hotjar, Segment, Mixpanel, Amplitude, PostHog, Klaviyo), TLS SAN covering both domains, adult content on clean site, shared Google/Bing/Facebook DNS verification tokens, SPF `include:`/`redirect=` naming another fleet domain, DMARC/CAA reports sent to a mailbox on another fleet domain, shared CAA `accounturi=` |
+| **high** | Shared favicon hash, same IP (cross-cluster), shared registrant org, identical ads.txt, shared ads.txt pub-ids across clusters, shared JSON-LD `sameAs` URLs, shared JS content hashes (cross-cluster), shared form/booking endpoints (Formspree, Calendly, etc.), shared Clarity project, shared self-hosted Plausible/Umami instance, shared workspace-level vendor key (Intercom, Crisp, Tawk, HubSpot, reCAPTCHA/hCaptcha/Turnstile site key, Google API key, Firebase, Webflow, Cookiebot, OneSignal, …), same DMARC `rua`/`ruf` or CAA `iodef` mailbox on 2+ sites, shared SPF sender IP (cross-cluster), shared CSP/NEL report collector (`<account>.report-uri.com`, Sentry ingest, identical endpoint) |
+| **medium** | Shared MX records (cross-cluster), registration dates within 7 days, shared meta generator (cross-cluster), shared affiliate redirect paths across clusters, shared CSS content hashes (cross-cluster), shared `twitter:site` handle, shared form/booking provider declared in CSP (Calendly/Formspree, fleet-wide or pairwise), shared non-commodity SPF `include:` (cross-cluster) |
+| **low** | Shared nameservers, shared robots.txt hash, shared font sources, shared sitemap URL patterns, shared IP (same cluster), shared MX/head structure/generator/CSS/JS/SPF (same cluster — downgraded) |
 
 **Same-cluster scoring**: Infrastructure findings (MX, head/body structure, generator, inline scripts, CSS, favicon) between domains in the same cluster are automatically downgraded in severity, since sharing is expected within a cluster. Cross-cluster sharing of the same signals remains at full severity.
 
-**Commodity vs. genuine signals**: Signals shared by "any Cloudflare + Astro" site (nameservers, MX, popular webfonts, sitemap/robots templates, generic generator/server/cookie headers) are weighted low in the similarity matrix and discounted in the isolation score, so unrelated brands on the same stack don't read as linked. Operator-specific signals (favicon, TLS SAN, shared form/booking handle, first-party JS, analytics IDs) carry the most weight.
+**Commodity vs. genuine signals**: Signals shared by "any Cloudflare + Astro" site (nameservers, MX, bulk-mailer SPF includes such as `_spf.google.com`/`sendgrid.net`, the hosted `plausible.io` script, popular webfonts, sitemap/robots templates, generic generator/server/cookie headers) are weighted low in the similarity matrix and discounted in the isolation score, so unrelated brands on the same stack don't read as linked. Operator-specific signals (favicon, TLS SAN, shared form/booking handle, first-party JS, analytics IDs) carry the most weight.
 
 **Coverage caveat**: sites whose fetch failed or that returned an error status contribute only DNS/TLS/WHOIS signals — none of their HTML, analytics or asset fingerprints were observed. The report lists them under `Coverage: n/N sites reachable` (JSON: `unreachable[]`) and the "looks good" verdict is annotated, so 7 dead sites out of 10 can't masquerade as a well-isolated fleet.
 
@@ -286,7 +289,7 @@ peep diff audit-2026-01.json audit-2026-02.json
 peep diff scan-before.json scan-after.json -j
 ```
 
-Shows: new/resolved correlation findings, new/removed domains, analytics ID changes (GA4, AdSense, GTM), noindex status changes (NOINDEX→LIVE or LIVE→NOINDEX), adult score changes >= 10 points, security-score and SEO-score drift, SEO checks that started/stopped failing, and — for `--pages` route audits present in both files — per-page SEO score, failing checks, canonical and noindex changes (e.g. "/de lost its og:image" between two deploys).
+Shows: new/resolved correlation findings, new/removed domains, analytics and third-party ID changes (GA4, AdSense, GTM, Facebook pixel, Clarity, and every vendor key such as a new Stripe key or chat widget appearing on a deploy), SPF/DMARC posture drift, noindex status changes (NOINDEX→LIVE or LIVE→NOINDEX), adult score changes >= 10 points, security-score and SEO-score drift, SEO checks that started/stopped failing, and — for `--pages` route audits present in both files — per-page SEO score, failing checks, canonical and noindex changes (e.g. "/de lost its og:image" between two deploys).
 
 `diff` compares only these semantic fields. Volatile data — timestamps, timings, TLS expiry countdowns, per-build asset hashes — is never compared, so a Next.js redeploy with no real change diffs clean.
 
@@ -298,6 +301,7 @@ Run as a CI/CD gate before deploying a domain:
 peep check mysite.com --cluster clean
 peep check mysite.com --min-score 70
 peep check mysite.com --require-security-txt
+peep check mysite.com --require-email-auth              # SPF -all/~all + DMARC quarantine/reject
 peep check mysite.com --cluster clean --allow-noindex   # pre-launch: noindex is intentional
 peep check mysite.com --only tls,robots                  # gates whose scanner didn't run are noted, not failed
 peep check mysite.com --pages /de,/en --require-seo "Open Graph,Canonical URL" --min-seo 80
@@ -310,6 +314,7 @@ Exit 0 only if **all** of:
   pre-launch, see below
 - Security header score >= `--min-score` (default: 50)
 - `security.txt` present (if `--require-security-txt`)
+- SPF published with `-all`/`~all` and DMARC with `p=quarantine|reject` (if `--require-email-auth`) — a storefront that sends order mail from a domain with no DMARC is both spoofable and headed for spam
 - SEO score of the root page and every `--pages` route >= `--min-seo` (if given); the failure names the checks that dragged it down
 - Every check named in `--require-seo` (e.g. `"Open Graph"`) rates *good* on the root page and every `--pages` route — the "a page lost its `og:image` in this deploy" gate
 - Every `--pages` route answers 2xx and is not noindex (unless declared pre-launch)
@@ -335,6 +340,32 @@ every other check (adult content, security score, critical errors) still
 gates normally. The flag is per-invocation only — it is never read from
 `.peeprc` — so it can't quietly keep passing after the site actually launches
 and someone forgets to remove noindex.
+
+## Email authentication (SPF / DMARC / CAA)
+
+The `dns` scanner reads the apex `v=spf1` TXT, the `_dmarc.<domain>` TXT and
+CAA records and prints a verdict per record:
+
+```
+    CAA: issue letsencrypt.org, iodef mailto:certs@example.com
+    + SPF: -all · include: _spf.google.com — hard fail for unlisted senders
+    ~ DMARC: p=none rua=dmarc@example.com — p=none — monitoring only, spoofed mail is still delivered
+```
+
+- **SPF** — `-all` / `~all` is good; `?all`, no terminal, or `+all` is weak/bad;
+  more than 10 `include:`/`redirect=` terms exceeds the DNS-lookup limit
+  (permerror). A domain that never sends mail should still publish
+  `v=spf1 -all`.
+- **DMARC** — `p=reject`/`quarantine` is good; `p=none` (monitoring) and
+  `pct<100` are warnings; missing means SPF/DKIM failures are never enforced.
+
+Beyond posture, these records are **ownership signals** the correlation stage
+uses: the same `rua=` mailbox on two domains is the same mail administrator; an
+`include:` that names another fleet domain, or reports delivered to a mailbox
+on another fleet domain, is an explicit cross-domain link written into DNS.
+Bulk-mailer includes (`_spf.google.com`, `sendgrid.net`, …) are commodity and
+ignored. `peep fleet` lists every spoofable domain in one block, and `peep diff`
+reports SPF/DMARC drift between two snapshots.
 
 ## Scanning hostile targets
 

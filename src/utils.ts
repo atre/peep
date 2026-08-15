@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { ScanningConfig } from './types.js';
+import type { DnsResult, ScanningConfig } from './types.js';
 
 /** Write `content` to `outFile` (resolved against cwd) and return the absolute path.
  *  Shared by every command that supports --out so the flag isn't a per-command no-op. */
@@ -208,4 +208,60 @@ export function describeHttpStatus(status: number): string {
 /** True when the response is an error page rather than the site itself. */
 export function isErrorStatus(status: number | null | undefined): status is number {
   return typeof status === 'number' && status >= 400;
+}
+
+// ── Email authentication (SPF / DMARC) ──
+
+export interface EmailAuthCheck {
+  name: 'SPF' | 'DMARC';
+  rating: 'good' | 'warning' | 'missing' | 'bad';
+  /** One-line human summary, e.g. `-all · include: _spf.google.com`. */
+  value: string;
+  detail: string;
+}
+
+/**
+ * Judge a domain's SPF + DMARC posture from the dns scanner output. Returns
+ * null when the dns scanner didn't run (or is a pre-0.2 JSON without the
+ * fields) — "unknown" must not read as "missing".
+ */
+export function emailAuthChecks(dns: DnsResult | null | undefined): EmailAuthCheck[] | null {
+  if (!dns || dns.spf === undefined || dns.dmarc === undefined) return null;
+  const out: EmailAuthCheck[] = [];
+
+  const spf = dns.spf;
+  if (!spf) {
+    out.push({ name: 'SPF', rating: 'missing', value: 'none', detail: 'No SPF record — any server can send mail as this domain (publish `v=spf1 -all` if the domain never sends)' });
+  } else {
+    const parts: string[] = [];
+    if (spf.includes.length) parts.push(`include: ${spf.includes.join(', ')}`);
+    if (spf.ip4.length || spf.ip6.length) parts.push(`ip: ${[...spf.ip4, ...spf.ip6].join(', ')}`);
+    if (spf.redirect) parts.push(`redirect=${spf.redirect}`);
+    const value = [spf.all ?? '(no all)', ...parts].join(' · ');
+    if (spf.all === '+all') out.push({ name: 'SPF', rating: 'bad', value, detail: 'SPF ends in +all — every sender passes, record is meaningless' });
+    else if (spf.all === '?all' || spf.all === null) out.push({ name: 'SPF', rating: 'warning', value, detail: `SPF has ${spf.all ?? 'no'} terminal — unlisted senders are neutral, not rejected` });
+    else if (spf.includes.length + (spf.redirect ? 1 : 0) > 10) out.push({ name: 'SPF', rating: 'warning', value, detail: 'More than 10 include/redirect terms — exceeds the SPF DNS-lookup limit (permerror)' });
+    else out.push({ name: 'SPF', rating: 'good', value, detail: spf.all === '-all' ? 'hard fail for unlisted senders' : 'soft fail for unlisted senders' });
+  }
+
+  const dmarc = dns.dmarc;
+  if (!dmarc) {
+    out.push({ name: 'DMARC', rating: 'missing', value: 'none', detail: 'No _dmarc record — SPF/DKIM failures are not enforced, spoofed mail is still delivered' });
+  } else {
+    const parts = [`p=${dmarc.policy ?? '?'}`];
+    if (dmarc.subdomainPolicy) parts.push(`sp=${dmarc.subdomainPolicy}`);
+    if (dmarc.pct !== null && dmarc.pct !== 100) parts.push(`pct=${dmarc.pct}`);
+    if (dmarc.rua.length) parts.push(`rua=${dmarc.rua.join(',')}`);
+    if (dmarc.ruf.length) parts.push(`ruf=${dmarc.ruf.join(',')}`);
+    const value = parts.join(' ');
+    if (dmarc.policy === 'reject' || dmarc.policy === 'quarantine') {
+      if (dmarc.pct !== null && dmarc.pct < 100) out.push({ name: 'DMARC', rating: 'warning', value, detail: `p=${dmarc.policy} applies to only ${dmarc.pct}% of mail` });
+      else out.push({ name: 'DMARC', rating: 'good', value, detail: `p=${dmarc.policy} — spoofed mail is ${dmarc.policy === 'reject' ? 'rejected' : 'quarantined'}` });
+    } else if (dmarc.policy === 'none') {
+      out.push({ name: 'DMARC', rating: 'warning', value, detail: 'p=none — monitoring only, spoofed mail is still delivered' });
+    } else {
+      out.push({ name: 'DMARC', rating: 'bad', value, detail: `DMARC record present but policy is ${dmarc.policy ? `"${dmarc.policy}"` : 'missing'} — malformed` });
+    }
+  }
+  return out;
 }

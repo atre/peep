@@ -42,6 +42,76 @@ const KNOWN_CDN_PATTERNS = [
   /cdn\.ampproject\.org/i,
 ];
 
+// Third-party IDs from analytics.other that are account/project-level and thus
+// definitive ownership links when shared. Everything else in `other` (workspace
+// keys, widget IDs, site keys) is 'high' — same vendor account is very likely
+// but the ID could in theory be copied. Names listed in OTHER_ID_IGNORE are
+// site-local counters (Matomo idsite "1") or already correlated elsewhere.
+const OTHER_ID_CRITICAL = new Set([
+  'Google Ads Conversion', 'Google Site Verification', 'Stripe Publishable Key',
+  'PayPal Client ID', 'Mailchimp Account', 'Shopify Store', 'Sentry DSN',
+  'TikTok Pixel', 'LinkedIn Insight', 'Pinterest Tag', 'Snap Pixel',
+  'X/Twitter Pixel', 'Reddit Pixel', 'Bing UET Tag', 'Yandex Metrika',
+  'Hotjar', 'Klaviyo Company', 'Segment Write Key', 'Mixpanel Token',
+  'Amplitude API Key', 'PostHog Key',
+]);
+const OTHER_ID_IGNORE = new Set(['Matomo Site ID', 'Umami Script Source']);
+
+function otherIdSeverity(name: string): Severity | null {
+  if (name.startsWith('DNS:')) return null; // DNS TXT records are correlated as shared-dns-txt
+  if (OTHER_ID_IGNORE.has(name)) return null;
+  return OTHER_ID_CRITICAL.has(name) ? 'critical' : 'high';
+}
+
+// SPF includes that name a bulk mail provider — shared by millions of domains,
+// no more of a link than a shared MX. Anything else (a custom `include:` or a
+// fleet member's own domain) is worth a finding.
+const COMMODITY_SPF_INCLUDES = [
+  // matched by apex: `_netblocks2.google.com` and `_spf.google.com` are both Google
+  'google.com', 'googlemail.com', 'outlook.com', 'sendgrid.net', 'mailgun.org', 'amazonses.com',
+  'mandrillapp.com', 'mcsv.net', 'mailchimp.com', 'zoho.com', 'zohomail.com', 'salesforce.com',
+  'mktomail.com', 'mailjet.com', 'sparkpostmail.com', 'brevo.com', 'sendinblue.com',
+  'mtasv.net', 'postmarkapp.com', 'protonmail.ch', 'messagingengine.com', 'icloud.com',
+  'yandex.net', 'mail.ru', 'ovh.com', 'ionos.com', 'secureserver.net', 'mx.cloudflare.net',
+  'improvmx.com', 'hostinger.com', 'mailerlite.com', 'constantcontact.com', 'klaviyo.com',
+  'zendesk.com', 'freshdesk.com', 'hubspot.com', 'intercom.io', 'helpscoutemail.com',
+  'mailersend.net', 'resend.com', 'loops.so', 'firebasemail.com', 'customer.io', 'mailtrap.io',
+  'stripe.com', 'mimecast.com', 'smtp2go.com', 'emailsrvr.com', 'elasticemail.com',
+  'aliyun.com', 'qq.com', 'web.de', 'gmx.net', 'websitewelcome.com', 'exclaimer.net',
+  'sendpulse.com', 'omnisend.com', 'atlassian.net', 'shopify.com', 'docusign.net', 'slack.com',
+];
+
+function isCommoditySpfInclude(inc: string): boolean {
+  return COMMODITY_SPF_INCLUDES.some((c) => underDomain(inc, c));
+}
+
+/** True when `host` is `domain` or a subdomain of it. */
+function underDomain(host: string, domain: string): boolean {
+  const h = host.toLowerCase();
+  const d = domain.toLowerCase();
+  return h === d || h.endsWith('.' + d);
+}
+
+/** Domain part of a mailbox (`a@b.com` → `b.com`); null when not an address. */
+function mailboxDomain(addr: string): string | null {
+  const at = addr.lastIndexOf('@');
+  return at > 0 ? addr.slice(at + 1).toLowerCase() : null;
+}
+
+// Report collectors where the account lives in the hostname (any two URLs on
+// the same host = same account, whatever the path).
+const ACCOUNT_HOST_COLLECTORS = ['report-uri.com', 'uriports.com', 'ingest.sentry.io', 'ingest.us.sentry.io', 'ingest.de.sentry.io'];
+
+function reportEndpointKeys(endpoints: string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const ep of endpoints) {
+    keys.add(ep);
+    const host = ep.split('/')[0];
+    if (ACCOUNT_HOST_COLLECTORS.some((c) => underDomain(host, c))) keys.add(host);
+  }
+  return keys;
+}
+
 function isWhoisPrivacyPlaceholder(org: string): boolean {
   const lower = org.toLowerCase().trim();
   return WHOIS_PRIVACY_PLACEHOLDERS.some((p) => lower.includes(p));
@@ -78,14 +148,19 @@ export function computeCorrelation(
     const idSiteCounts: Record<string, number> = {};
     for (const r of results) {
       if (!r.analytics) continue;
-      const umamiIds = r.analytics.umami.map((u) => u.websiteId).filter(Boolean);
-      for (const id of [...r.analytics.ga4, ...r.analytics.adsense, ...r.analytics.gtm, ...r.analytics.cloudflare, ...umamiIds]) {
+      for (const id of trackingIdsOf(r.analytics)) {
         idSiteCounts[id] = (idSiteCounts[id] || 0) + 1;
       }
     }
     for (const [id, count] of Object.entries(idSiteCounts)) {
       if (count >= 3) fleetWideIds.add(id);
     }
+  }
+
+  // Pre-compute report-collector keys per domain (used in the pairwise loop)
+  const reportKeys = new Map<string, Set<string>>();
+  for (const r of results) {
+    if (r.security?.reportEndpoints?.length) reportKeys.set(r.domain, reportEndpointKeys(r.security.reportEndpoints));
   }
 
   // Pre-compute cluster map for O(1) lookups instead of repeated linear scans
@@ -165,6 +240,40 @@ export function computeCorrelation(
         }
       }
 
+      // ── Email infrastructure: SPF ──
+      if (a.dns?.spf && b.dns?.spf) {
+        const spfSameCluster = sameCluster(a.domain, b.domain);
+        const sharedIps = [...a.dns.spf.ip4, ...a.dns.spf.ip6]
+          .filter((ip) => b.dns!.spf!.ip4.includes(ip) || b.dns!.spf!.ip6.includes(ip));
+        if (sharedIps.length > 0) {
+          similarity += spfSameCluster ? 4 : 15;
+          findings.push(finding('shared-spf-ip', spfSameCluster ? 'low' : 'high', pair,
+            `Shared SPF sender IP(s): ${sharedIps.slice(0, 3).join(', ')}`,
+            spfSameCluster ? `Expected for same-cluster sites` : `Both domains authorize the same mail server — same outbound mail infrastructure`));
+        }
+        const sharedIncludes = a.dns.spf.includes
+          .filter((inc) => b.dns!.spf!.includes.includes(inc) && !isCommoditySpfInclude(inc));
+        if (sharedIncludes.length > 0) {
+          similarity += 12;
+          findings.push(finding('shared-spf-include', spfSameCluster ? 'low' : 'medium', pair,
+            `Shared non-commodity SPF include: ${sharedIncludes.join(', ')}`,
+            `Same custom SPF include = same mail relay/operator`));
+        }
+      }
+
+      // ── Violation-report collectors (CSP report-uri / Report-To / NEL) ──
+      const aKeys = reportKeys.get(a.domain);
+      const bKeys = reportKeys.get(b.domain);
+      if (aKeys && bKeys) {
+        const shared = [...bKeys].filter((k) => aKeys.has(k));
+        if (shared.length > 0) {
+          similarity += 20;
+          findings.push(finding('shared-report-endpoint', 'high', pair,
+            `Shared report collector: ${shared[0]}`,
+            `Same CSP/NEL reporting endpoint — same monitoring account`));
+        }
+      }
+
       // ── Analytics IDs (CRITICAL — same GA4/AdSense = game over) ──
       // Skip pairwise findings for IDs already covered by fleet-wide findings to avoid double-counting
       if (a.analytics && b.analytics) {
@@ -217,6 +326,59 @@ export function computeCorrelation(
                 `Same Cloudflare analytics property`));
             }
           }
+        }
+        for (const pixel of a.analytics.facebook) {
+          if (b.analytics.facebook.includes(pixel)) {
+            similarity += 40;
+            if (!fleetWideIds.has(pixel)) {
+              findings.push(finding('shared-facebook-pixel', 'critical', pair,
+                `SHARED FACEBOOK PIXEL: ${pixel}`,
+                `Same Meta pixel = same ad account`));
+            }
+          }
+        }
+        for (const clarityId of a.analytics.clarity) {
+          if (b.analytics.clarity.includes(clarityId)) {
+            similarity += 25;
+            if (!fleetWideIds.has(clarityId)) {
+              findings.push(finding('shared-clarity', 'high', pair,
+                `Shared Microsoft Clarity project: ${clarityId}`,
+                `Same Clarity project across sites`));
+            }
+          }
+        }
+        // Plausible: a shared data-domain means site B reports into site A's
+        // property; a shared self-hosted script host is a shared instance.
+        for (const pl of a.analytics.plausible) {
+          if (!b.analytics.plausible.includes(pl)) continue;
+          const isScript = /\.js(\?|$)/.test(pl) || pl.includes('/');
+          if (isScript) {
+            if (/plausible\.io\//.test(pl)) continue; // the hosted script URL is commodity
+            similarity += 25;
+            findings.push(finding('shared-plausible-src', 'high', pair,
+              `Same self-hosted Plausible script: ${pl}`,
+              `Shared self-hosted analytics instance`));
+          } else {
+            similarity += 40;
+            if (!fleetWideIds.has(pl)) {
+              findings.push(finding('shared-plausible-domain', 'critical', pair,
+                `SHARED PLAUSIBLE data-domain: ${pl}`,
+                `Both sites report into the same Plausible property`));
+            }
+          }
+        }
+        // Everything else: Stripe keys, pixels, chat widgets, site keys…
+        for (const o of a.analytics.other) {
+          const severity = otherIdSeverity(o.name);
+          if (!severity) continue;
+          if (!b.analytics.other.some((p) => p.name === o.name && p.id === o.id)) continue;
+          similarity += severity === 'critical' ? 35 : 20;
+          if (fleetWideIds.has(`${o.name}\t${o.id}`)) continue;
+          findings.push(finding('shared-third-party-id', severity, pair,
+            `Shared ${o.name}: ${o.id}`,
+            severity === 'critical'
+              ? `Same ${o.name} = same vendor account — definitive link`
+              : `Same ${o.name} across sites — same vendor workspace/project`));
         }
       }
 
@@ -528,16 +690,20 @@ export function computeCorrelation(
   const idCounts: Record<string, string[]> = {};
   for (const r of results) {
     if (!r.analytics) continue;
-    const umamiIds = r.analytics.umami.map((u) => u.websiteId).filter(Boolean);
-    for (const id of [...r.analytics.ga4, ...r.analytics.adsense, ...r.analytics.gtm, ...r.analytics.cloudflare, ...umamiIds]) {
+    for (const id of trackingIdsOf(r.analytics)) {
       if (!idCounts[id]) idCounts[id] = [];
-      idCounts[id].push(r.domain);
+      if (!idCounts[id].includes(r.domain)) idCounts[id].push(r.domain);
     }
   }
   for (const [id, domains] of Object.entries(idCounts)) {
     if (domains.length >= 3) {
-      findings.push(finding('fleet-wide-tracking-id', 'critical', domains,
-        `Tracking ID ${id} found on ${domains.length} sites`,
+      // "<name>\t<id>" keys come from analytics.other and carry their own class
+      const eq = id.indexOf('\t');
+      const name = eq > 0 ? id.slice(0, eq) : null;
+      const severity = name ? (otherIdSeverity(name) ?? 'high') : 'critical';
+      const label = name ? `${name} ${id.slice(eq + 1)}` : `Tracking ID ${id}`;
+      findings.push(finding('fleet-wide-tracking-id', severity, domains,
+        `${label} found on ${domains.length} sites`,
         `Fleet-wide shared tracking ID: ${domains.join(', ')}`));
     }
   }
@@ -607,6 +773,87 @@ export function computeCorrelation(
       findings.push(finding('fleet-wide-twitter-site', 'medium', domains,
         `twitter:site ${handle} shared across ${domains.length} sites`,
         `Same Twitter/X account: ${domains.join(', ')}`));
+    }
+  }
+
+  // ── Email OPSEC: DMARC/CAA report mailboxes and SPF cross-references ──
+  {
+    const fleetDomains = results.map((r) => r.domain);
+    // Another fleet domain that `host` sits under — excluding self and any
+    // fleet entry that is a parent/child of self (shop.example.com referring
+    // to example.com is the same apex, not a cross-brand link).
+    const otherFleetDomain = (host: string, self: string): string | null =>
+      fleetDomains.find((d) => d !== self && !underDomain(d, self) && !underDomain(self, d)
+        && underDomain(host, d) && !underDomain(host, self)) ?? null;
+    // addr → domain pairs already covered by a critical explicit-link finding, so
+    // the aggregate "shared mailbox" pass doesn't restate the same pair; a third
+    // site sharing that mailbox is still reported.
+    const explicitlyLinked = new Map<string, Set<string>>();
+    const pairOf = (x: string, y: string) => [x, y].sort().join('|');
+    const markLinked = (key: string, pair = '') => {
+      const set = explicitlyLinked.get(key) ?? new Set<string>();
+      set.add(pair);
+      explicitlyLinked.set(key, set);
+    };
+
+    const reportAddrMap: Record<string, string[]> = {};
+    const accountUriMap: Record<string, string[]> = {};
+    for (const r of results) {
+      const dmarc = r.dns?.dmarc;
+      const addrs = new Set<string>([...(dmarc?.rua ?? []), ...(dmarc?.ruf ?? [])].map((x) => x.toLowerCase()));
+      for (const caa of r.dns?.caa ?? []) {
+        const m = caa.match(/^(?:iodef|contactemail)\s+(?:mailto:)?(\S+@\S+)$/i);
+        if (m?.[1]) addrs.add(m[1].toLowerCase());
+      }
+      for (const addr of addrs) {
+        (reportAddrMap[addr] ??= []).push(r.domain);
+        // Reports for this domain are delivered to a mailbox on another fleet domain
+        const mailDomain = mailboxDomain(addr);
+        const target = mailDomain ? otherFleetDomain(mailDomain, r.domain) : null;
+        if (target) {
+          markLinked(addr, pairOf(r.domain, target));
+          findings.push(finding('report-address-on-fleet-domain', 'critical', [r.domain, target],
+            `${r.domain} sends DMARC/CAA reports to ${addr} — a mailbox on fleet domain ${target}`,
+            `A DNS record on one domain names another fleet domain — explicit ownership link`));
+        }
+      }
+
+      // SPF include: / redirect= pointing at another fleet domain
+      const spf = r.dns?.spf;
+      if (spf) {
+        for (const ref of [...spf.includes, ...(spf.redirect ? [spf.redirect] : [])]) {
+          const target = otherFleetDomain(ref, r.domain);
+          // A mutual include (A→B and B→A) is one relationship, one finding
+          const pairKey = `spf:${[r.domain, target].sort().join('|')}`;
+          if (target && !explicitlyLinked.has(pairKey)) {
+            markLinked(pairKey);
+            findings.push(finding('spf-references-fleet-domain', 'critical', [r.domain, target],
+              `${r.domain} SPF includes ${ref} — a fleet domain`,
+              `Domain authorizes another fleet domain's mail servers — explicit ownership link`));
+          }
+        }
+      }
+
+      // CAA accounturi= (ACME account binding) shared across domains is the same ACME account
+      for (const caa of r.dns?.caa ?? []) {
+        const m = caa.match(/accounturi=([^;\s]+)/i);
+        if (m?.[1]) (accountUriMap[m[1]] ??= []).push(r.domain);
+      }
+    }
+    for (const [addr, domains] of Object.entries(reportAddrMap)) {
+      const unique = [...new Set(domains)];
+      if (unique.length < 2) continue;
+      if (unique.length === 2 && explicitlyLinked.get(addr)?.has(pairOf(unique[0], unique[1]))) continue; // already a critical finding
+      findings.push(finding('shared-report-mailbox', 'high', unique,
+        `DMARC/CAA reports for ${unique.length} sites go to ${addr}`,
+        `Same reporting mailbox = same mail administrator: ${unique.join(', ')}`));
+    }
+    for (const [uri, domains] of Object.entries(accountUriMap)) {
+      const unique = [...new Set(domains)];
+      if (unique.length < 2) continue;
+      findings.push(finding('shared-caa-account', 'critical', unique,
+        `Shared CAA accounturi ${uri} across ${unique.length} sites`,
+        `Same ACME/CA account issues certificates for all: ${unique.join(', ')}`));
     }
   }
 
@@ -690,6 +937,25 @@ export function computeCorrelation(
   }
 
   return { findings, matrix };
+}
+
+/**
+ * Every ID on a site that is a fleet-wide correlation candidate. Plain IDs for the
+ * dedicated arrays; `<name>\t<id>` for analytics.other so a Stripe key and a GA4
+ * property can never collide and the finding can name the vendor.
+ */
+function trackingIdsOf(a: NonNullable<ScanResult['analytics']>): string[] {
+  const ids = [
+    ...a.ga4, ...a.adsense, ...a.gtm, ...a.cloudflare,
+    ...a.facebook, ...a.clarity,
+    ...a.umami.map((u) => u.websiteId).filter(Boolean),
+    // plausible data-domain values (not script URLs)
+    ...a.plausible.filter((p) => !(/\.js(\?|$)/.test(p) || p.includes('/'))),
+  ];
+  for (const o of a.other) {
+    if (otherIdSeverity(o.name)) ids.push(`${o.name}\t${o.id}`);
+  }
+  return ids;
 }
 
 function finding(type: string, severity: Severity, domains: string[], detail: string, evidence: string): CorrelationFinding {

@@ -236,7 +236,64 @@ export function scanSecurity(
 
   const score = maxPoints === 0 ? 100 : Math.round((points / maxPoints) * 100);
 
-  return { score, headers: results, formProviders: extractCspFormProviders(headers) };
+  return {
+    score,
+    headers: results,
+    formProviders: extractCspFormProviders(headers),
+    reportEndpoints: extractReportEndpoints(headers),
+  };
+}
+
+// Cloudflare's NEL collector is injected on every proxied zone — its per-response
+// token is not an operator identity, so it never counts as a shared collector.
+const COMMODITY_REPORT_HOSTS = ['a.nel.cloudflare.com'];
+
+/**
+ * Collect the URLs violation reports are sent to: CSP `report-uri`, the
+ * `Report-To` header (JSON groups with `endpoints[].url`, also used by NEL) and
+ * the newer `Reporting-Endpoints` header (`name="url", …`). Normalized to
+ * `host/path` (lowercased host, query dropped) so the same collector matches
+ * across sites even when a per-site query token differs.
+ */
+export function extractReportEndpoints(headers: Record<string, string>): string[] {
+  const urls: string[] = [];
+
+  for (const key of ['content-security-policy', 'content-security-policy-report-only']) {
+    const csp = headers[key];
+    if (!csp) continue;
+    // Not parseCspDirectives(): that lowercases values, and report-uri.com
+    // paths / Sentry keys are case-sensitive account identifiers.
+    for (const directive of csp.split(';')) {
+      const tokens = directive.trim().split(/\s+/).filter(Boolean);
+      if (tokens[0]?.toLowerCase() === 'report-uri') urls.push(...tokens.slice(1));
+    }
+  }
+
+  const reportTo = headers['report-to'];
+  if (reportTo) {
+    // Header may hold several comma-separated JSON objects; the URL fields are all we need
+    const re = /"url"\s*:\s*"([^"]{1,500})"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(reportTo)) !== null) urls.push(m[1]);
+  }
+
+  const reportingEndpoints = headers['reporting-endpoints'];
+  if (reportingEndpoints) {
+    const re = /=\s*"([^"]{1,500})"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(reportingEndpoints)) !== null) urls.push(m[1]);
+  }
+
+  const out = new Set<string>();
+  for (const raw of urls) {
+    let parsed: URL;
+    try { parsed = new URL(raw); } catch { continue; }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue;
+    const host = parsed.hostname.toLowerCase();
+    if (COMMODITY_REPORT_HOSTS.some((c) => host === c || host.endsWith('.' + c))) continue;
+    out.add(`${host}${parsed.pathname.replace(/\/$/, '')}`);
+  }
+  return [...out].sort();
 }
 
 // Third-party form/booking providers worth correlating across a fleet. A shared

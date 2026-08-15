@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeCorrelation } from '../src/correlation/matrix.js';
 import { buildReport, collapseCommodityPairwise } from '../src/correlation/scoring.js';
-import type { ScanResult, HtmlResult, CorrelationFinding } from '../src/types.js';
+import type { ScanResult, HtmlResult, CorrelationFinding, AnalyticsResult } from '../src/types.js';
 
 function makeScan(domain: string, overrides: Partial<ScanResult> = {}): ScanResult {
   return {
@@ -603,4 +603,222 @@ test('collapseCommodityPairwise leaves non-commodity findings untouched', () => 
     { type: 'shared-ga4', severity: 'critical', domains: ['a.com', 'b.com'], detail: 'GA4', evidence: 'z' },
   ];
   assert.deepEqual(collapseCommodityPairwise(findings), findings);
+});
+
+// ── 0.2: third-party IDs, email OPSEC, report collectors ──
+
+function analyticsWith(over: Partial<AnalyticsResult> = {}): AnalyticsResult {
+  return { ...makeAnalytics(), ...over };
+}
+
+test('shared Facebook pixel → critical pairwise finding (was never correlated)', () => {
+  const results = [
+    makeScan('a.com', { analytics: analyticsWith({ facebook: ['123456789012345'] }) }),
+    makeScan('b.com', { analytics: analyticsWith({ facebook: ['123456789012345'] }) }),
+  ];
+  const { findings, matrix } = computeCorrelation(results);
+  const f = findings.find((x) => x.type === 'shared-facebook-pixel');
+  assert.ok(f, 'expected shared-facebook-pixel');
+  assert.equal(f!.severity, 'critical');
+  assert.ok(matrix['a.com']['b.com'] >= 40);
+});
+
+test('shared Clarity project → high; shared Plausible data-domain → critical', () => {
+  const results = [
+    makeScan('a.com', { analytics: analyticsWith({ clarity: ['abc123'], plausible: ['a.com'] }) }),
+    makeScan('b.com', { analytics: analyticsWith({ clarity: ['abc123'], plausible: ['a.com'] }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  assert.equal(findings.find((x) => x.type === 'shared-clarity')?.severity, 'high');
+  assert.equal(findings.find((x) => x.type === 'shared-plausible-domain')?.severity, 'critical');
+});
+
+test('shared plausible.io hosted script URL is commodity, self-hosted script host is high', () => {
+  const hosted = computeCorrelation([
+    makeScan('a.com', { analytics: analyticsWith({ plausible: ['https://plausible.io/js/script.js'] }) }),
+    makeScan('b.com', { analytics: analyticsWith({ plausible: ['https://plausible.io/js/script.js'] }) }),
+  ]).findings;
+  assert.ok(!hosted.some((f) => f.type.startsWith('shared-plausible')), 'hosted script must not link sites');
+  const self = computeCorrelation([
+    makeScan('a.com', { analytics: analyticsWith({ plausible: ['https://stats.ops.example/js/plausible.js'] }) }),
+    makeScan('b.com', { analytics: analyticsWith({ plausible: ['https://stats.ops.example/js/plausible.js'] }) }),
+  ]).findings;
+  assert.equal(self.find((f) => f.type === 'shared-plausible-src')?.severity, 'high');
+});
+
+test('shared Stripe key → critical shared-third-party-id; shared Intercom app → high; Matomo idsite ignored', () => {
+  const stripe = { name: 'Stripe Publishable Key', id: 'pk_live_abcdefghijklmnopqrstuvwxyz' };
+  const intercom = { name: 'Intercom App', id: 'ab12cd34' };
+  const matomo = { name: 'Matomo Site ID', id: '1' };
+  const results = [
+    makeScan('a.com', { analytics: analyticsWith({ other: [stripe, intercom, matomo] }) }),
+    makeScan('b.com', { analytics: analyticsWith({ other: [stripe, intercom, matomo] }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  const tp = findings.filter((f) => f.type === 'shared-third-party-id');
+  assert.equal(tp.length, 2, `expected 2 third-party findings, got ${JSON.stringify(tp)}`);
+  assert.equal(tp.find((f) => /Stripe/.test(f.detail))?.severity, 'critical');
+  assert.equal(tp.find((f) => /Intercom/.test(f.detail))?.severity, 'high');
+  assert.ok(!findings.some((f) => /Matomo/.test(f.detail)), 'Matomo idsite "1" collides across unrelated sites');
+});
+
+test('DNS:<vendor> entries in analytics.other are not double-counted as third-party IDs', () => {
+  const dnsTok = { name: 'DNS:Stripe', id: 'abc' };
+  const results = [
+    makeScan('a.com', { analytics: analyticsWith({ other: [dnsTok] }) }),
+    makeScan('b.com', { analytics: analyticsWith({ other: [dnsTok] }) }),
+  ];
+  assert.ok(!computeCorrelation(results).findings.some((f) => f.type === 'shared-third-party-id'));
+});
+
+test('third-party ID on 3+ sites → one fleet-wide finding naming the vendor, no pairwise dupes', () => {
+  const key = { name: 'reCAPTCHA Site Key', id: '6LcAbCdEfGhIjKlMnOpQrStUvWxYz012345678_-' };
+  const results = ['a.com', 'b.com', 'c.com'].map((d) => makeScan(d, { analytics: analyticsWith({ other: [key] }) }));
+  const { findings } = computeCorrelation(results);
+  const fleet = findings.filter((f) => f.type === 'fleet-wide-tracking-id');
+  assert.equal(fleet.length, 1);
+  assert.equal(fleet[0].severity, 'high');
+  assert.match(fleet[0].detail, /reCAPTCHA Site Key 6Lc/);
+  assert.equal(findings.filter((f) => f.type === 'shared-third-party-id').length, 0);
+});
+
+// ── Email OPSEC ──
+
+function spf(raw: string) {
+  const includes = [...raw.matchAll(/include:(\S+)/g)].map((m) => m[1]);
+  const ip4 = [...raw.matchAll(/ip4:(\S+)/g)].map((m) => m[1]);
+  return { raw, includes, ip4, ip6: [], redirect: null, all: '-all' as const };
+}
+function dmarc(rua: string[]) {
+  return { raw: '', policy: 'reject', subdomainPolicy: null, rua, ruf: [], pct: null };
+}
+
+test('same DMARC rua mailbox on 2 sites → high fleet-wide shared-report-mailbox', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { dmarc: dmarc(['dmarc-reports@ops.example']) }) }),
+    makeScan('b.com', { dns: makeDns([], { dmarc: dmarc(['DMARC-Reports@ops.example']) }) }),
+    makeScan('c.com', { dns: makeDns([], { dmarc: dmarc(['other@elsewhere.example']) }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  const f = findings.find((x) => x.type === 'shared-report-mailbox');
+  assert.ok(f, 'expected shared-report-mailbox');
+  assert.equal(f!.severity, 'high');
+  assert.deepEqual(f!.domains.sort(), ['a.com', 'b.com']);
+});
+
+test('DMARC reports delivered to a mailbox on another fleet domain → critical explicit link', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { dmarc: dmarc(['dmarc@mail.b.com']) }) }),
+    makeScan('b.com', { dns: makeDns() }),
+  ];
+  const { findings } = computeCorrelation(results);
+  const f = findings.find((x) => x.type === 'report-address-on-fleet-domain');
+  assert.ok(f);
+  assert.equal(f!.severity, 'critical');
+  assert.deepEqual(f!.domains, ['a.com', 'b.com']);
+});
+
+test('SPF include: of another fleet domain → critical; commodity include shared → no finding', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { spf: spf('v=spf1 include:_spf.google.com include:b.com -all') }) }),
+    makeScan('b.com', { dns: makeDns([], { spf: spf('v=spf1 include:_spf.google.com -all') }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  assert.equal(findings.find((x) => x.type === 'spf-references-fleet-domain')?.severity, 'critical');
+  assert.ok(!findings.some((x) => x.type === 'shared-spf-include'), 'google include is commodity');
+});
+
+test('shared custom SPF include → medium cross-cluster; shared SPF ip4 → high cross-cluster, low same-cluster', () => {
+  const clusters = { one: ['a.com'], two: ['b.com'], same: ['c.com', 'd.com'] };
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { spf: spf('v=spf1 include:spf.relay.example ip4:203.0.113.5 -all') }) }),
+    makeScan('b.com', { dns: makeDns([], { spf: spf('v=spf1 include:spf.relay.example ip4:203.0.113.5 -all') }) }),
+    makeScan('c.com', { dns: makeDns([], { spf: spf('v=spf1 ip4:198.51.100.9 -all') }) }),
+    makeScan('d.com', { dns: makeDns([], { spf: spf('v=spf1 ip4:198.51.100.9 -all') }) }),
+  ];
+  const { findings } = computeCorrelation(results, clusters);
+  const inc = findings.find((x) => x.type === 'shared-spf-include' && x.domains.includes('a.com'));
+  assert.equal(inc?.severity, 'medium');
+  const ipCross = findings.find((x) => x.type === 'shared-spf-ip' && x.domains.includes('a.com'));
+  assert.equal(ipCross?.severity, 'high');
+  const ipSame = findings.find((x) => x.type === 'shared-spf-ip' && x.domains.includes('c.com'));
+  assert.equal(ipSame?.severity, 'low');
+});
+
+test('shared CAA accounturi → critical; shared CAA iodef mailbox → high', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { caa: ['issue letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123', 'iodef mailto:certs@ops.example'] }) }),
+    makeScan('b.com', { dns: makeDns([], { caa: ['issue letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123', 'iodef mailto:certs@ops.example'] }) }),
+    makeScan('c.com', { dns: makeDns([], { caa: ['issue letsencrypt.org'] }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  assert.equal(findings.find((x) => x.type === 'shared-caa-account')?.severity, 'critical');
+  assert.equal(findings.find((x) => x.type === 'shared-report-mailbox')?.severity, 'high');
+  assert.ok(!findings.some((x) => x.domains.includes('c.com') && /caa|mailbox/.test(x.type)), 'plain issue letsencrypt.org is commodity');
+});
+
+test('email findings are fleet-wide types: one critical costs 25 regardless of fleet size', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { spf: spf('v=spf1 include:b.com -all') }) }),
+    ...['b.com', 'c.com', 'd.com', 'e.com', 'f.com'].map((d) => makeScan(d, { dns: makeDns() })),
+  ];
+  const { findings, matrix } = computeCorrelation(results);
+  const report = buildReport(results, findings, matrix);
+  assert.equal(report.score, 75);
+});
+
+// ── Report collectors ──
+
+test('same report-uri.com subdomain (different paths) → high shared-report-endpoint', () => {
+  const results = [
+    makeScan('a.com', { security: { ...makeSecurity(), reportEndpoints: ['acme.report-uri.com/r/d/csp/enforce'] } }),
+    makeScan('b.com', { security: { ...makeSecurity(), reportEndpoints: ['acme.report-uri.com/a/d/g'] } }),
+  ];
+  const { findings } = computeCorrelation(results);
+  const f = findings.find((x) => x.type === 'shared-report-endpoint');
+  assert.equal(f?.severity, 'high');
+  assert.match(f!.detail, /acme\.report-uri\.com/);
+});
+
+test('generic collector hosts only match on identical host/path', () => {
+  const differ = computeCorrelation([
+    makeScan('a.com', { security: { ...makeSecurity(), reportEndpoints: ['collector.example.net/a'] } }),
+    makeScan('b.com', { security: { ...makeSecurity(), reportEndpoints: ['collector.example.net/b'] } }),
+  ]).findings;
+  assert.ok(!differ.some((x) => x.type === 'shared-report-endpoint'));
+  const same = computeCorrelation([
+    makeScan('a.com', { security: { ...makeSecurity(), reportEndpoints: ['collector.example.net/a'] } }),
+    makeScan('b.com', { security: { ...makeSecurity(), reportEndpoints: ['collector.example.net/a'] } }),
+  ]).findings;
+  assert.ok(same.some((x) => x.type === 'shared-report-endpoint'));
+});
+
+test('mutual SPF includes (A→B, B→A) yield one critical finding, not two', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { spf: spf('v=spf1 include:b.com -all') }) }),
+    makeScan('b.com', { dns: makeDns([], { spf: spf('v=spf1 include:a.com -all') }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  assert.equal(findings.filter((f) => f.type === 'spf-references-fleet-domain').length, 1);
+});
+
+test('CAA accounturi captured up to the next ; regardless of spacing', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { caa: ['issue letsencrypt.org; accounturi=https://acme/acct/1; validationmethods=dns-01'] }) }),
+    makeScan('b.com', { dns: makeDns([], { caa: ['issue letsencrypt.org;accounturi=https://acme/acct/1;validationmethods=dns-01'] }) }),
+  ];
+  assert.ok(computeCorrelation(results).findings.some((f) => f.type === 'shared-caa-account'));
+});
+
+test('shared mailbox on a fleet domain: explicit critical for the linked pair, third site still reported', () => {
+  const results = [
+    makeScan('a.com', { dns: makeDns([], { dmarc: dmarc(['dmarc@ops.b.com']) }) }),
+    makeScan('b.com', { dns: makeDns() }),
+    makeScan('c.com', { dns: makeDns([], { dmarc: dmarc(['dmarc@ops.b.com']) }) }),
+  ];
+  const { findings } = computeCorrelation(results);
+  assert.equal(findings.filter((f) => f.type === 'report-address-on-fleet-domain').length, 2, 'a→b and c→b');
+  const shared = findings.find((f) => f.type === 'shared-report-mailbox');
+  assert.ok(shared, 'a.com and c.com share the mailbox — must still be reported');
+  assert.deepEqual(shared!.domains.sort(), ['a.com', 'c.com']);
 });

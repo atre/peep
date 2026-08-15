@@ -26,9 +26,11 @@ export function scanAnalytics(html: string, dnsResult?: DnsResult | null): Analy
           case 'GA4 Measurement ID':
             if (!result.ga4.includes(`G-${id}`)) result.ga4.push(`G-${id}`);
             break;
-          case 'GTM Container':
-            if (!result.gtm.includes(id)) result.gtm.push(id.startsWith('GTM-') ? id : `GTM-${id}`);
+          case 'GTM Container': {
+            const gtm = id.startsWith('GTM-') ? id : `GTM-${id}`;
+            if (!result.gtm.includes(gtm)) result.gtm.push(gtm);
             break;
+          }
           case 'Google AdSense Publisher':
             if (!result.adsense.includes(`ca-pub-${id}`)) result.adsense.push(`ca-pub-${id}`);
             break;
@@ -111,4 +113,27 @@ export function scanAnalytics(html: string, dnsResult?: DnsResult | null): Analy
   }
 
   return result;
+}
+
+/**
+ * Merge tracking IDs found on subpages (sitemap crawl / --pages routes) into the
+ * homepage result. Checkout, contact and booking pages are where Stripe keys,
+ * reCAPTCHA site keys and form-vendor IDs live — a homepage-only scan misses them.
+ */
+export function mergeAnalytics(target: AnalyticsResult, source: AnalyticsResult): void {
+  const addAll = (dst: string[], src: string[]) => { for (const v of src) if (!dst.includes(v)) dst.push(v); };
+  addAll(target.ga4, source.ga4);
+  addAll(target.gtm, source.gtm);
+  addAll(target.adsense, source.adsense);
+  addAll(target.facebook, source.facebook);
+  addAll(target.clarity, source.clarity);
+  addAll(target.plausible, source.plausible);
+  addAll(target.cloudflare, source.cloudflare);
+  for (const u of source.umami) {
+    if (!target.umami.some((t) => t.websiteId === u.websiteId)) target.umami.push({ ...u });
+  }
+  for (const o of source.other) {
+    if (o.name.startsWith('DNS:')) continue; // DNS tokens are per-domain, already on the target
+    if (!target.other.some((t) => t.name === o.name && t.id === o.id)) target.other.push({ ...o });
+  }
 }

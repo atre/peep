@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, expandScanners, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
-import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus, parsePagesFlag } from '../utils.js';
+import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus, parsePagesFlag, emailAuthChecks } from '../utils.js';
 
 const DEFAULT_SECURITY_THRESHOLD = 50;
 
@@ -20,6 +20,11 @@ export interface CheckGateOptions {
   /** SEO checks (by name, e.g. "Open Graph") that must rate `good` on the root
    *  page and every audited route — the "a page lost its og:image" gate. */
   requiredSeoChecks?: string[];
+  /** --require-email-auth: SPF must be published with a -all/~all terminal and
+   *  DMARC with p=quarantine|reject — a domain that sends transactional mail
+   *  (order confirmations, password resets) is spoofable and lands in spam
+   *  without them. */
+  requireEmailAuth?: boolean;
 }
 
 export interface CheckGateResult {
@@ -143,6 +148,22 @@ export function evaluateCheck(
     }
   }
 
+  // Check 6b: email authentication (SPF/DMARC) — opt-in gate.
+  if (opts.requireEmailAuth) {
+    if (!ran('dns')) {
+      notes.push('email auth not checked (dns excluded by --only)');
+    } else {
+      const checks = emailAuthChecks(scanResult.dns);
+      if (!checks) {
+        notes.push('email auth not evaluated (dns scanner produced no result)');
+      } else {
+        for (const ch of checks) {
+          if (ch.rating !== 'good') failures.push(`${ch.name} ${ch.rating === 'missing' ? 'missing' : 'weak'} — ${ch.detail}`);
+        }
+      }
+    }
+  }
+
   // Check 7: no critical scan errors
   const criticalErrors = scanResult.errors.filter((e) =>
     ['dns', 'http', 'tls'].includes(e.scanner),
@@ -183,6 +204,7 @@ export async function cmdCheck(
   const rawSeo = typeof flags['min-seo'] === 'string' ? Number(flags['min-seo']) : NaN;
   const minSeoScore = Number.isFinite(rawSeo) ? rawSeo : null;
   const requiredSeoChecks = typeof flags['require-seo'] === 'string' ? String(flags['require-seo']).split(',') : [];
+  const requireEmailAuth = flags['require-email-auth'] === true;
 
   if (format === 'text') {
     process.stdout.write(`Checking ${c('cyan', domain)}...`);
@@ -209,6 +231,7 @@ export async function cmdCheck(
     only,
     minSeoScore,
     requiredSeoChecks,
+    requireEmailAuth,
   });
   const secScore = scanResult.security?.score ?? 0;
 

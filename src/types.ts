@@ -10,6 +10,38 @@ export interface DnsResult {
   googleVerification: string | null;
   microsoftVerification: string | null;
   facebookVerification: string | null;
+  /** Parsed `v=spf1` record from the apex TXT set (null = no SPF published).
+   *  Optional: absent in JSON written before 0.2. */
+  spf?: SpfRecord | null;
+  /** Parsed `_dmarc.<domain>` TXT (null = no DMARC published). */
+  dmarc?: DmarcRecord | null;
+  /** CAA records as `tag value` strings, e.g. `issue letsencrypt.org`. */
+  caa?: string[];
+}
+
+export interface SpfRecord {
+  raw: string;
+  includes: string[];
+  ip4: string[];
+  ip6: string[];
+  /** `redirect=` modifier target, if any. */
+  redirect: string | null;
+  /** Terminal `all` qualifier: `-all` (fail), `~all` (softfail), `?all` (neutral),
+   *  `+all` (pass — effectively no SPF), or null when the record has no `all`. */
+  all: '-all' | '~all' | '?all' | '+all' | null;
+}
+
+export interface DmarcRecord {
+  raw: string;
+  /** `p=` policy: none | quarantine | reject (null when malformed). */
+  policy: string | null;
+  /** `sp=` subdomain policy. */
+  subdomainPolicy: string | null;
+  /** Aggregate report addresses (`rua=`), `mailto:` prefix stripped. */
+  rua: string[];
+  /** Forensic report addresses (`ruf=`), `mailto:` prefix stripped. */
+  ruf: string[];
+  pct: number | null;
 }
 
 export interface HttpResult {
@@ -192,6 +224,14 @@ export interface SecurityResult {
    * without crawling subpages — see correlation `shared-form-provider`.
    */
   formProviders: string[];
+  /**
+   * Violation-report collectors declared in CSP `report-uri`, the `Report-To`
+   * / `Reporting-Endpoints` headers (also used by NEL). Normalized to
+   * `host/path` without query. A `<account>.report-uri.com` or Sentry ingest
+   * endpoint shared by two sites is the same account — see correlation
+   * `shared-report-endpoint`. Optional: absent in JSON written before 0.2.
+   */
+  reportEndpoints?: string[];
 }
 
 // ── SEO ──

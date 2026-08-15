@@ -16,6 +16,7 @@ const BOOLEAN_FLAGS = new Set([
   'hash-content',
   'skip-content-hash',
   'require-security-txt',
+  'require-email-auth',
   'prelaunch',
   'allow-noindex',
   'verbose',
@@ -156,6 +157,8 @@ FLAGS
   --cluster <name>       Cluster context for check command (clean|adult)
   --min-score <n>        Minimum security score for check command (default: 50)
   --require-security-txt Fail check if security.txt is absent
+  --require-email-auth   check only: fail unless SPF (-all/~all) and DMARC
+                         (p=quarantine|reject) are published — spoofable domain
   --min-seo <n>          check only: fail if the SEO score of the root page or
                           any --pages route is below n
   --require-seo <checks> check only: comma-separated SEO check names that must
@@ -233,6 +236,7 @@ EXAMPLES
   peep scan example.com --pages 5
   peep scan example.com --pages /de,/fr     # per-page SEO/hreflang audit
   peep check example.com --require-security-txt
+  peep check example.com --require-email-auth              # SPF + DMARC enforced
   peep check example.com --cluster clean --expect noindex   # pre-launch gate
   peep check example.com --cluster clean --prelaunch        # same, shorthand
   peep check example.com --pages /de,/en --require-seo "Open Graph"  # per-route gate

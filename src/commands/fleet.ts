@@ -1,7 +1,7 @@
 import { scanDomain } from '../scanners/index.js';
 import { mapConcurrent } from '../concurrency.js';
 import type { PeepConfig, ScanResult, OutputFormat } from '../types.js';
-import { c, formatDuration, getCluster, resolveScanningConfig, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
+import { c, formatDuration, getCluster, resolveScanningConfig, isAdultCluster, describeHttpStatus, isErrorStatus, emailAuthChecks, type EmailAuthCheck } from '../utils.js';
 
 export async function cmdFleet(
   config: PeepConfig,
@@ -77,6 +77,20 @@ export async function cmdFleet(
       for (const r of downSites) {
         const code = r.http!.statusCode;
         console.error(`    ${r.domain.padEnd(30)} HTTP ${code} — ${describeHttpStatus(code)}`);
+      }
+    }
+
+    // Email posture: a fleet-level list of spoofable domains (no SPF/DMARC or
+    // DMARC p=none) — the same fact per-domain in `scan`, rolled up here.
+    const spoofable = results
+      .map((r) => ({ domain: r.domain, checks: emailAuthChecks(r.dns) }))
+      .filter((x): x is { domain: string; checks: EmailAuthCheck[] } => !!x.checks && x.checks.some((ch) => ch.rating !== 'good'));
+    if (spoofable.length > 0) {
+      const label = quiet ? '' : '  ';
+      console.error(`${label}${c('yellow', `${spoofable.length} site(s) with weak or missing email authentication (spoofable):`)}`);
+      for (const x of spoofable) {
+        const why = x.checks.filter((ch) => ch.rating !== 'good').map((ch) => `${ch.name} ${ch.rating === 'missing' ? 'missing' : ch.value}`).join(', ');
+        console.error(`    ${x.domain.padEnd(30)} ${why}`);
       }
     }
 

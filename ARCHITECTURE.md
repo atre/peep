@@ -52,16 +52,16 @@ peep/
 │   ├── types.ts              # Shared result types for every scanner
 │   ├── scanners/
 │   │   ├── index.ts          # Orchestrator — phase ordering, per-scanner isolation
-│   │   ├── dns.ts            # A/AAAA/MX/TXT/NS/CNAME + verification tokens
+│   │   ├── dns.ts            # A/AAAA/MX/TXT/NS/CNAME/CAA, SPF + DMARC parsing
 │   │   ├── http.ts           # Status, headers, timing, redirect chain, cookies
 │   │   ├── tls.ts            # Issuer, SAN list, protocol, cipher, expiry
 │   │   ├── whois.ts          # Registrar/registrant, RDAP fallback
 │   │   ├── robots.ts         # robots.txt, ads.txt, security.txt, sitemaps
 │   │   ├── html.ts           # Meta/OG/Twitter, JSON-LD, structure hashes, forms
-│   │   ├── analytics.ts      # GA4, GTM, AdSense, Umami, Pixel, Plausible, …
+│   │   ├── analytics.ts      # GA4, GTM, pixels, 40+ vendor account IDs, subpage merge
 │   │   ├── assets.ts         # Favicon/CSS/JS hashes, fonts, images
 │   │   ├── content.ts        # Grey-red scoring, affiliate + ad network detection
-│   │   ├── security.ts       # Security-header score, CSP analysis, CORS
+│   │   ├── security.ts       # Security-header score, CSP analysis, CORS, report collectors
 │   │   ├── tech.ts           # Framework/CDN/host/server fingerprinting
 │   │   └── seo.ts            # Derived SEO score over html + robots
 │   ├── correlation/
@@ -120,7 +120,14 @@ parseArgs(argv)
 
 Findings carry a severity (`critical` / `high` / `medium` / `low`) and are either
 **pairwise** (a signal shared between two specific domains) or **fleet-wide**
-(a tracking ID on 3+ sites, a cross-cluster content leak).
+(a tracking ID on 3+ sites, a cross-cluster content leak, a DMARC mailbox or
+SPF `include:` that names another fleet domain).
+
+Vendor IDs from `analytics.other` are classed in `matrix.ts`: account-level
+keys (Stripe, PayPal, ad pixels, Sentry DSN, …) are `critical` when shared,
+workspace/site keys (Intercom, reCAPTCHA, HubSpot, …) are `high`, and
+site-local counters (Matomo `idsite`) are ignored. `DNS:*` entries are TXT
+tokens already covered by `shared-dns-txt`.
 
 Two adjustments keep the score meaningful on real fleets:
 

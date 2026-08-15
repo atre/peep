@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ScanResult, CorrelationReport, DiffReport, DiffEntry, Severity } from '../types.js';
-import { c } from '../utils.js';
+import { c, emailAuthChecks } from '../utils.js';
 
 const CHANGE_TYPES = new Set<DiffEntry['type']>(['analytics_change', 'noindex_change', 'adult_score_change', 'score_change', 'page_change']);
 
@@ -69,6 +69,15 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
     diffIdSet(changes, domain, 'GA4', sa.analytics?.ga4, sb.analytics?.ga4);
     diffIdSet(changes, domain, 'AdSense', sa.analytics?.adsense, sb.analytics?.adsense);
     diffIdSet(changes, domain, 'GTM', sa.analytics?.gtm, sb.analytics?.gtm);
+    diffIdSet(changes, domain, 'Facebook Pixel', sa.analytics?.facebook, sb.analytics?.facebook);
+    diffIdSet(changes, domain, 'Clarity', sa.analytics?.clarity, sb.analytics?.clarity);
+    // Third-party account IDs (Stripe key, pixels, chat widgets…) — a new
+    // vendor key appearing on a deploy is exactly the drift a baseline should catch.
+    // DNS:* entries are DNS TXT tokens, compared separately below.
+    const otherIds = (a: typeof sa) => (a.analytics?.other ?? []).filter((o) => !o.name.startsWith('DNS:')).map((o) => `${o.name}: ${o.id}`);
+    diffIdSet(changes, domain, 'third-party', otherIds(sa), otherIds(sb));
+    // Email posture: an SPF/DMARC record that vanished (or appeared) between snapshots
+    diffEmailAuth(changes, domain, sa.dns, sb.dns);
 
     // Score drift (security headers, SEO) — the deploy-to-deploy regressions a
     // baseline exists to catch. Volatile fields (timestamps, timing, asset
@@ -176,6 +185,23 @@ function diffFailingChecks(
   }
   for (const name of failA.keys()) {
     if (!failB.has(name)) changes.push({ type, domain, detail: `${where}: SEO check fixed — ${name}` });
+  }
+}
+
+/** SPF/DMARC drift between two dns results — only when both snapshots carry the fields. */
+function diffEmailAuth(changes: DiffEntry[], domain: string, a: ScanResult['dns'], b: ScanResult['dns']): void {
+  const ca = emailAuthChecks(a);
+  const cb = emailAuthChecks(b);
+  if (!ca || !cb) return;
+  for (const after of cb) {
+    const before = ca.find((x) => x.name === after.name);
+    if (!before || (before.rating === after.rating && before.value === after.value)) continue;
+    changes.push({
+      type: 'score_change',
+      domain,
+      detail: `${domain}: ${after.name} ${before.rating} → ${after.rating} (${before.value} → ${after.value})`,
+      severity: after.rating === 'good' ? undefined : after.rating === 'bad' || after.rating === 'missing' ? 'high' : 'medium',
+    });
   }
 }
 

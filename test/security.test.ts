@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scanSecurity, extractCspFormProviders } from '../src/scanners/security.js';
+import { scanSecurity, extractCspFormProviders, extractReportEndpoints } from '../src/scanners/security.js';
 
 const GOOD_HEADERS: Record<string, string> = {
   'strict-transport-security': 'max-age=63072000; includeSubDomains; preload',
@@ -294,4 +294,35 @@ test('scanSecurity surfaces formProviders on the result', () => {
 
 test('scanSecurity formProviders is [] without CSP', () => {
   assert.deepEqual(scanSecurity(EMPTY_HEADERS).formProviders, []);
+});
+
+// ── Report collectors (CSP report-uri / Report-To / Reporting-Endpoints) ──
+
+test('extractReportEndpoints: CSP report-uri, Report-To JSON and Reporting-Endpoints, normalized host/path without query', () => {
+  const headers = {
+    'content-security-policy': "default-src 'self'; report-uri https://acme.report-uri.com/r/d/csp/enforce?token=1",
+    'report-to': '{"group":"csp","max_age":10886400,"endpoints":[{"url":"https://acme.report-uri.com/a/d/g"}]}, {"group":"nel","endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=abc"}]}',
+    'reporting-endpoints': 'csp="https://o123.ingest.sentry.io/api/456/security/?sentry_key=k", default="https://collector.example.net/"',
+  };
+  assert.deepEqual(extractReportEndpoints(headers), [
+    'acme.report-uri.com/a/d/g',
+    'acme.report-uri.com/r/d/csp/enforce',
+    'collector.example.net',
+    'o123.ingest.sentry.io/api/456/security',
+  ]);
+});
+
+test('extractReportEndpoints: Cloudflare NEL collector is commodity and dropped; no headers → []', () => {
+  assert.deepEqual(extractReportEndpoints({ 'report-to': '{"group":"cf-nel","endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=x"}]}' }), []);
+  assert.deepEqual(extractReportEndpoints({}), []);
+});
+
+test('scanSecurity result carries reportEndpoints', () => {
+  const r = scanSecurity({ 'content-security-policy': "default-src 'self'; report-uri https://x.report-uri.com/r/d/csp/enforce" });
+  assert.deepEqual(r.reportEndpoints, ['x.report-uri.com/r/d/csp/enforce']);
+});
+
+test('extractReportEndpoints preserves path case (report-uri.com slugs are case-sensitive)', () => {
+  const r = extractReportEndpoints({ 'content-security-policy': "default-src 'self'; Report-URI https://Acme.report-uri.com/r/D/CSP/Enforce" });
+  assert.deepEqual(r, ['acme.report-uri.com/r/D/CSP/Enforce']);
 });

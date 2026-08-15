@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scanAnalytics } from '../src/scanners/analytics.js';
+import { scanAnalytics, mergeAnalytics } from '../src/scanners/analytics.js';
 
 test('GA4 G-XXXXXXXX detected from gtag config', () => {
   const html = `<script>gtag('config', 'G-ABC123DEFG');</script>`;
@@ -159,4 +159,108 @@ test('extractors stay fast on adversarial repetition', () => {
   scanAnalytics(blob);
   const elapsed = Date.now() - start;
   assert.ok(elapsed < 3000, `analytics scan took ${elapsed}ms on adversarial input — quantifier may be unbounded`);
+});
+
+// ── Third-party account IDs (0.2) ──
+
+function other(html: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const o of scanAnalytics(html).other) (out[o.name] ??= []).push(o.id);
+  return out;
+}
+
+test('Stripe publishable key extracted (live and test)', () => {
+  const o = other(`<script>Stripe('pk_live_51Habcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP');</script>`);
+  assert.deepEqual(o['Stripe Publishable Key'], ['pk_live_51Habcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP']);
+});
+
+test('Sentry DSN yields both the org id and the public key', () => {
+  const o = other(`<script>Sentry.init({dsn:"https://0123456789abcdef0123456789abcdef@o4506123456.ingest.us.sentry.io/4506999999"})</script>`);
+  assert.deepEqual(o['Sentry Org'], ['o4506123456']);
+  assert.deepEqual(o['Sentry DSN'], ['0123456789abcdef0123456789abcdef']);
+});
+
+test('reCAPTCHA v2/v3 site key (6L…, 40 chars) extracted from data-sitekey and render=', () => {
+  const key = '6LcAbCdEfGhIjKlMnOpQrStUvWxYz012345678_-';
+  assert.equal(key.length, 40);
+  const o = other(`<div class="g-recaptcha" data-sitekey="${key}"></div><script src="https://www.google.com/recaptcha/api.js?render=${key}"></script>`);
+  assert.deepEqual(o['reCAPTCHA Site Key'], [key], 'deduped across two occurrences');
+});
+
+test('TikTok, LinkedIn, Pinterest, Reddit, X pixels', () => {
+  const o = other(`
+    <script>ttq.load('CABC123DEFGHIJKLMNOP');</script>
+    <script>_linkedin_partner_id = "1234567";</script>
+    <script>pintrk('load', '2612345678901');</script>
+    <script>rdt('init','t2_abcd1234');</script>
+    <script>twq('config','odc7x');</script>`);
+  assert.deepEqual(o['TikTok Pixel'], ['CABC123DEFGHIJKLMNOP']);
+  assert.deepEqual(o['LinkedIn Insight'], ['1234567']);
+  assert.deepEqual(o['Pinterest Tag'], ['2612345678901']);
+  assert.deepEqual(o['Reddit Pixel'], ['t2_abcd1234']);
+  assert.deepEqual(o['X/Twitter Pixel'], ['odc7x']);
+});
+
+test('HubSpot portal, Intercom app, Crisp website, Tawk property, Mailchimp account, Shopify store', () => {
+  const o = other(`
+    <script src="//js-eu1.hs-scripts.com/1234567.js"></script>
+    <script>window.intercomSettings = { api_base: "https://api-iam.intercom.io", app_id: "ab12cd34" };</script>
+    <script>window.$crisp=[];window.CRISP_WEBSITE_ID="12345678-1234-1234-1234-123456789abc";</script>
+    <script src="https://embed.tawk.to/5f1e2d3c4b5a69001234abcd/default"></script>
+    <form action="https://example.us21.list-manage.com/subscribe/post?u=0123456789abcdef01234567&amp;id=abc123"></form>
+    <img src="https://cdn.shopify.com/s/files/1/0123/4567/files/logo.png">`);
+  assert.deepEqual(o['HubSpot Portal'], ['1234567']);
+  assert.deepEqual(o['Intercom App'], ['ab12cd34']);
+  assert.deepEqual(o['Crisp Website'], ['12345678-1234-1234-1234-123456789abc']);
+  assert.deepEqual(o['Tawk.to Property'], ['5f1e2d3c4b5a69001234abcd']);
+  assert.deepEqual(o['Mailchimp Account'], ['0123456789abcdef01234567']);
+  assert.deepEqual(o['Shopify Store'], ['0123/4567']);
+});
+
+test('Google Ads conversion id, Bing UET tag, Yandex Metrika, PostHog, Segment', () => {
+  const o = other(`
+    <script>gtag('config', 'AW-1234567890');</script>
+    <script>(function(w,d,t,r,u){var f,n,i;w[u]=w[u]||[],f=function(){var o={ti:"12345678", enableAutoSpaTracking: true};o.q=w[u],w[u]=new UET(o),w[u].push("pageLoad")}})(window,document,"script","//bat.bing.com/bat.js","uetq");</script>
+    <script>ym(87654321, "init", {});</script>
+    <script>posthog.init('phc_abcdefghijklmnopqrstuvwxyz0123456789ABCD', {api_host:'https://eu.posthog.com'})</script>
+    <script>analytics.load("AbCdEfGhIjKlMnOpQrStUvWx");</script>`);
+  assert.deepEqual(o['Google Ads Conversion'], ['1234567890']);
+  assert.deepEqual(o['Bing UET Tag'], ['12345678']);
+  assert.deepEqual(o['Yandex Metrika'], ['87654321']);
+  assert.deepEqual(o['PostHog Key'], ['phc_abcdefghijklmnopqrstuvwxyz0123456789ABCD']);
+  assert.deepEqual(o['Segment Write Key'], ['AbCdEfGhIjKlMnOpQrStUvWx']);
+});
+
+test('plain marketing page yields no third-party IDs (no false positives from prose)', () => {
+  const html = `<!DOCTYPE html><html><body><p>Our stripe of products, ti: 123, AW-1 and 0x4000 hex, contact app_id later.</p>
+    <script>var config = { ti: 12, projectId: "demo" };</script></body></html>`;
+  assert.deepEqual(scanAnalytics(html).other, []);
+});
+
+test('DNS TXT verification tokens beyond Google/Facebook land in other as DNS:<vendor>', () => {
+  const r = scanAnalytics('<html></html>', {
+    a: [], aaaa: [], mx: [], ns: [], cname: [], googleVerification: null, microsoftVerification: null, facebookVerification: null,
+    txt: ['stripe-verification=abc123def', 'apple-domain-verification=XyZ987', 'v=spf1 include:_spf.google.com ~all', 'openai-domain-verification=dv-abc'],
+  });
+  const names = r.other.map((o) => o.name).sort();
+  assert.deepEqual(names, ['DNS:Apple Business', 'DNS:OpenAI', 'DNS:Stripe']);
+});
+
+test('GTM container seen via gtm.js?id= and inline GTM-XXXX is reported once', () => {
+  const html = `<script src="https://www.googletagmanager.com/gtm.js?id=GTM-TH8KRSBJ"></script><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TH8KRSBJ"></iframe></noscript>`;
+  assert.deepEqual(scanAnalytics(html).gtm, ['GTM-TH8KRSBJ']);
+});
+
+test('mergeAnalytics folds subpage IDs into the homepage result without duplicates or DNS tokens', () => {
+  const home = scanAnalytics(`<script>gtag('config','G-HOMEHOME1')</script>`, {
+    a: [], aaaa: [], mx: [], ns: [], cname: [], googleVerification: null, microsoftVerification: null, facebookVerification: null,
+    txt: ['stripe-verification=abc'],
+  });
+  const checkout = scanAnalytics(`<script>gtag('config','G-HOMEHOME1'); Stripe('pk_live_51Habcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP');</script>`, {
+    a: [], aaaa: [], mx: [], ns: [], cname: [], googleVerification: null, microsoftVerification: null, facebookVerification: null,
+    txt: ['stripe-verification=abc'],
+  });
+  mergeAnalytics(home, checkout);
+  assert.deepEqual(home.ga4, ['G-HOMEHOME1']);
+  assert.deepEqual(home.other.map((o) => o.name), ['DNS:Stripe', 'Stripe Publishable Key']);
 });
