@@ -128,7 +128,7 @@ peep check example.com --cluster clean
 | `classify [domain...]` | Grey-red content classification only (defaults to fleet) |
 | `report` | Full fleet audit — scan + correlate + write report file |
 | `diff <fileA> <fileB>` | Compare two JSON scan/report outputs — new/resolved findings, domain changes, analytics drift |
-| `check <domain>` | Deploy-gate check — verifies noindex removed, no adult on clean cluster, security score >= threshold |
+| `check <domain>` | Deploy-gate check — verifies the site answers, noindex removed, no adult on clean cluster, security score >= threshold, optional per-route SEO gates (`--pages`, `--min-seo`, `--require-seo`) |
 | `version` | Print version |
 | `help` | Show help |
 
@@ -145,7 +145,7 @@ peep check example.com --cluster clean
 | `--skip-assets` | | Skip asset fetching (favicon/CSS/JS downloads) |
 | `--hash-content` | | Fetch and hash CSS/JS file content (deeper template fingerprinting; on by default) |
 | `--skip-content-hash` | | Skip CSS/JS content hashing — fingerprint by URL only (overrides the default) |
-| `--pages <n\|routes>` | | Number: fetch top N sitemap pages, following one level of sitemap index (catches form/booking endpoints on subpages). Routes: comma-separated paths (e.g. `/de,/fr`) get a per-page SEO/hreflang audit (score plus the failing checks under each route, also in JSON as `pageAudits[].seoIssues`) — for i18n routes a homepage scan can't reach. Works on `scan` and `report` |
+| `--pages <n\|routes>` | | Number: fetch top N sitemap pages, following one level of sitemap index (catches form/booking endpoints on subpages). Routes: comma-separated paths (e.g. `/de,/fr`) get a per-page SEO/hreflang audit (score plus the failing checks under each route, also in JSON as `pageAudits[].seoIssues`) — for i18n routes a homepage scan can't reach. Works on `scan`, `report` and `check` (where each route becomes a gate) |
 | | `-v` | Verbose output (scanner timing + raw data sections) |
 | | `-q` | Quiet output (suppress per-domain lines, show summary only) |
 | `--cluster <name>` | | Cluster context for `check` command (`clean` or `adult`) |
@@ -300,6 +300,7 @@ peep check mysite.com --min-score 70
 peep check mysite.com --require-security-txt
 peep check mysite.com --cluster clean --allow-noindex   # pre-launch: noindex is intentional
 peep check mysite.com --only tls,robots                  # gates whose scanner didn't run are noted, not failed
+peep check mysite.com --pages /de,/en --require-seo "Open Graph,Canonical URL" --min-seo 80
 ```
 
 Exit 0 only if **all** of:
@@ -309,6 +310,9 @@ Exit 0 only if **all** of:
   pre-launch, see below
 - Security header score >= `--min-score` (default: 50)
 - `security.txt` present (if `--require-security-txt`)
+- SEO score of the root page and every `--pages` route >= `--min-seo` (if given); the failure names the checks that dragged it down
+- Every check named in `--require-seo` (e.g. `"Open Graph"`) rates *good* on the root page and every `--pages` route — the "a page lost its `og:image` in this deploy" gate
+- Every `--pages` route answers 2xx and is not noindex (unless declared pre-launch)
 - No critical scan errors (DNS/HTTP/TLS)
 
 Exit 1 with a clear explanation of what failed.

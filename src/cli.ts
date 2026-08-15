@@ -149,12 +149,19 @@ FLAGS
   --pages <n|routes>     Number: fetch top N sitemap pages (merges form endpoints).
                           Routes: comma-separated paths (e.g. /de,/fr) get a per-page
                           SEO/hreflang audit — use for i18n routes a homepage scan misses.
+                          On check: each route must answer 2xx and not be noindex.
   -v                     Verbose output (show scanner timing, raw data,
                           and hash values in correlation findings)
   -q                     Quiet output (suppress per-domain lines, show summary only)
   --cluster <name>       Cluster context for check command (clean|adult)
   --min-score <n>        Minimum security score for check command (default: 50)
   --require-security-txt Fail check if security.txt is absent
+  --min-seo <n>          check only: fail if the SEO score of the root page or
+                          any --pages route is below n
+  --require-seo <checks> check only: comma-separated SEO check names that must
+                          pass on the root page and every --pages route, e.g.
+                          "Open Graph,Canonical URL" — blocks a deploy where a
+                          page lost its og:image
   --expect <state>       check only: --expect noindex (aliases: --prelaunch,
                           --allow-noindex)
                           converts a noindex failure into a PASS annotated
@@ -228,6 +235,7 @@ EXAMPLES
   peep check example.com --require-security-txt
   peep check example.com --cluster clean --expect noindex   # pre-launch gate
   peep check example.com --cluster clean --prelaunch        # same, shorthand
+  peep check example.com --pages /de,/en --require-seo "Open Graph"  # per-route gate
   peep scan example.com --dns 1.1.1.1   # bypass a stale OS negative-cache entry
 `);
 }

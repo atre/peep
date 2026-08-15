@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, expandScanners, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
-import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
+import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus, parsePagesFlag } from '../utils.js';
 
 const DEFAULT_SECURITY_THRESHOLD = 50;
 
@@ -15,6 +15,11 @@ export interface CheckGateOptions {
   /** Scanner subset the scan was run with (`--only`). Gates that depend on a
    *  scanner that was deliberately not run are skipped and noted, not failed. */
   only?: string[];
+  /** Minimum SEO score for the root page and every `--pages` route (null = not gated). */
+  minSeoScore?: number | null;
+  /** SEO checks (by name, e.g. "Open Graph") that must rate `good` on the root
+   *  page and every audited route — the "a page lost its og:image" gate. */
+  requiredSeoChecks?: string[];
 }
 
 export interface CheckGateResult {
@@ -97,7 +102,48 @@ export function evaluateCheck(
     }
   }
 
-  // Check 5: no critical scan errors
+  // Check 5: SEO gates — root page and each --pages route.
+  const minSeo = opts.minSeoScore ?? null;
+  const required = (opts.requiredSeoChecks ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean);
+  if (minSeo !== null || required.length > 0) {
+    if (!ran('seo') && !ran('html')) {
+      notes.push('SEO gates not evaluated (html excluded by --only)');
+    } else {
+      const targets: Array<{ label: string; score: number | null; failing: Array<{ name: string; detail: string }> }> = [];
+      if (scanResult.seo) {
+        targets.push({ label: '/', score: scanResult.seo.score, failing: scanResult.seo.checks.filter((ch) => ch.rating !== 'good') });
+      }
+      for (const p of scanResult.pageAudits ?? []) {
+        if (p.ok) targets.push({ label: p.route, score: p.seoScore, failing: p.seoIssues ?? [] });
+      }
+      for (const t of targets) {
+        if (minSeo !== null && t.score !== null && t.score < minSeo) {
+          const why = t.failing.map((f) => f.name).join(', ');
+          failures.push(`SEO score ${t.score}/100 on ${t.label} is below --min-seo ${minSeo}${why ? ` — failing: ${why}` : ''}`);
+        }
+        for (const f of t.failing) {
+          if (required.includes(f.name.toLowerCase())) {
+            failures.push(`SEO check "${f.name}" not passing on ${t.label} — ${f.detail}`);
+          }
+        }
+      }
+    }
+  }
+
+  // Check 6: every --pages route must answer (2xx) and, unless declared
+  // pre-launch, must not be noindex — a route that 404s after a deploy is a
+  // broken deploy even when the homepage is fine.
+  for (const p of scanResult.pageAudits ?? []) {
+    if (!p.ok) {
+      failures.push(`Route ${p.route} ${p.statusCode ? `returned HTTP ${p.statusCode}` : 'unreachable'}`);
+    } else if (p.isNoindex && !opts.expectNoindex) {
+      failures.push(`Route ${p.route} is NOINDEX — remove noindex before deploying`);
+    } else if (p.isNoindex) {
+      notes.push(`${p.route}: noindex (declared pre-launch)`);
+    }
+  }
+
+  // Check 7: no critical scan errors
   const criticalErrors = scanResult.errors.filter((e) =>
     ['dns', 'http', 'tls'].includes(e.scanner),
   );
@@ -133,6 +179,10 @@ export async function cmdCheck(
     }
   }
   const skipWhois = !(only?.includes('whois') ?? false);
+  const { pageRoutes } = parsePagesFlag(flags);
+  const rawSeo = typeof flags['min-seo'] === 'string' ? Number(flags['min-seo']) : NaN;
+  const minSeoScore = Number.isFinite(rawSeo) ? rawSeo : null;
+  const requiredSeoChecks = typeof flags['require-seo'] === 'string' ? String(flags['require-seo']).split(',') : [];
 
   if (format === 'text') {
     process.stdout.write(`Checking ${c('cyan', domain)}...`);
@@ -144,6 +194,7 @@ export async function cmdCheck(
     skipWhois,
     skipAssets: true,
     only,
+    pageRoutes,
   });
 
   if (format === 'text') {
@@ -156,6 +207,8 @@ export async function cmdCheck(
     requireSecurityTxt,
     expectNoindex,
     only,
+    minSeoScore,
+    requiredSeoChecks,
   });
   const secScore = scanResult.security?.score ?? 0;
 
@@ -198,7 +251,18 @@ export async function cmdCheck(
   const secStatus = scanResult.security
     ? `${c(scoreColor(secScore, securityThreshold), String(secScore))}/100`
     : c('dim', 'n/a');
-  console.log(`  Content: ${adultStatus}  |  Index: ${indexStatus}  |  Security: ${secStatus}`);
+  const seoStatus = scanResult.seo?.score != null
+    ? `  |  SEO: ${c(scoreColor(scanResult.seo.score, minSeoScore ?? 50), String(scanResult.seo.score))}/100`
+    : '';
+  console.log(`  Content: ${adultStatus}  |  Index: ${indexStatus}  |  Security: ${secStatus}${seoStatus}`);
+  if (scanResult.pageAudits?.length) {
+    const routes = scanResult.pageAudits.map((p) => {
+      if (!p.ok) return c('red', `${p.route} ✗`);
+      const score = p.seoScore != null ? c(scoreColor(p.seoScore, minSeoScore ?? 50), String(p.seoScore)) : 'n/a';
+      return `${p.route} ${score}${p.isNoindex ? c('yellow', ' [noindex]') : ''}`;
+    });
+    console.log(`  Routes: ${routes.join('  ')}`);
+  }
   if (clusterName) console.log(`  Cluster: ${clusterName}`);
   if (notes.length > 0) {
     for (const n of notes) console.log(`  ${c('dim', `note: ${n}`)}`);

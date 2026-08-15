@@ -143,3 +143,42 @@ test('an error status fails the gate even when every other check passes', () => 
   const r = evaluateCheck('example.com', scan({ http: http as never }), {}, opts());
   assert.ok(r.failures.some((f) => f.startsWith('HTTP 526 — Cloudflare: origin TLS certificate invalid')));
 });
+
+const ogBad = { name: 'Open Graph', present: true, value: '3/4', rating: 'warning' as const, detail: 'Missing: og:image' };
+const ogGood = { name: 'Open Graph', present: true, value: '4/4', rating: 'good' as const, detail: 'ok' };
+function page(route: string, over: Record<string, unknown> = {}) {
+  return { route, url: `https://example.com${route}`, statusCode: 200, ok: true, title: 't', htmlLang: 'de',
+    canonicalUrl: null, isNoindex: false, hreflang: [], seoScore: 87, seoIssues: [], formEndpoints: [], ...over } as never;
+}
+
+test('--require-seo fails when a --pages route lost the named check; root passing is not enough', () => {
+  const r = evaluateCheck('example.com', scan({
+    seo: { score: 100, checks: [ogGood], evaluated: 1, total: 12 },
+    pageAudits: [page('/de'), page('/de/products', { seoScore: 79, seoIssues: [ogBad] })],
+  }), {}, opts({ requiredSeoChecks: ['open graph'] }));
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0], /"Open Graph" not passing on \/de\/products — Missing: og:image/);
+});
+
+test('--min-seo applies to root and every route, naming the failing checks', () => {
+  const r = evaluateCheck('example.com', scan({
+    seo: { score: 60, checks: [ogBad], evaluated: 1, total: 12 },
+    pageAudits: [page('/de', { seoScore: 90 })],
+  }), {}, opts({ minSeoScore: 80 }));
+  assert.deepEqual(r.failures, ['SEO score 60/100 on / is below --min-seo 80 — failing: Open Graph']);
+});
+
+test('--pages routes must answer and must not be noindex (unless declared pre-launch)', () => {
+  const audits = [page('/de'), page('/en', { ok: false, statusCode: 404 }), page('/fr', { isNoindex: true })];
+  const r = evaluateCheck('example.com', scan({ pageAudits: audits }), {}, opts());
+  assert.deepEqual(r.failures, ['Route /en returned HTTP 404', 'Route /fr is NOINDEX — remove noindex before deploying']);
+  const pre = evaluateCheck('example.com', scan({ pageAudits: audits }), {}, opts({ expectNoindex: true }));
+  assert.deepEqual(pre.failures, ['Route /en returned HTTP 404']);
+  assert.ok(pre.notes.includes('/fr: noindex (declared pre-launch)'));
+});
+
+test('SEO gates are noted, not failed, when html was excluded by --only', () => {
+  const r = evaluateCheck('example.com', scan({ security: null }), {}, opts({ only: ['tls'], minSeoScore: 90 }));
+  assert.deepEqual(r.failures, []);
+  assert.ok(r.notes.some((n) => n.startsWith('SEO gates not evaluated')));
+});
