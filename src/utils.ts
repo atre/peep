@@ -175,3 +175,37 @@ export function getCluster(domain: string, clusters: Record<string, string[]>): 
 export function isAdultCluster(cluster: string | null | undefined): boolean {
   return cluster != null && cluster.trim().toLowerCase().startsWith('adult');
 }
+
+/**
+ * Human meaning of an error status, with the Cloudflare 52x family spelled out —
+ * "526" alone sends people to a search engine; "origin certificate invalid"
+ * tells them what to fix.
+ */
+export function describeHttpStatus(status: number): string {
+  const known: Record<number, string> = {
+    400: 'bad request',
+    401: 'authentication required',
+    403: 'forbidden — bot protection or access control blocked the request',
+    404: 'not found — root path returns 404',
+    410: 'gone',
+    429: 'rate limited',
+    500: 'internal server error',
+    502: 'bad gateway — upstream returned an invalid response',
+    503: 'service unavailable — maintenance or overloaded',
+    504: 'gateway timeout',
+    520: 'Cloudflare: origin returned an unknown/empty response',
+    521: 'Cloudflare: origin web server is down (connection refused)',
+    522: 'Cloudflare: connection to origin timed out',
+    523: 'Cloudflare: origin unreachable (DNS/routing)',
+    524: 'Cloudflare: origin timed out sending a response',
+    525: 'Cloudflare: TLS handshake with origin failed',
+    526: 'Cloudflare: origin TLS certificate invalid (Full (strict) mode)',
+    530: 'Cloudflare: origin DNS error / tunnel or access blocked',
+  };
+  return known[status] ?? (status >= 500 ? 'server error' : 'client error');
+}
+
+/** True when the response is an error page rather than the site itself. */
+export function isErrorStatus(status: number | null | undefined): status is number {
+  return typeof status === 'number' && status >= 400;
+}

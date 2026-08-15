@@ -267,6 +267,8 @@ The `correlate` and `report` commands compute a pairwise similarity matrix acros
 
 **Commodity vs. genuine signals**: Signals shared by "any Cloudflare + Astro" site (nameservers, MX, popular webfonts, sitemap/robots templates, generic generator/server/cookie headers) are weighted low in the similarity matrix and discounted in the isolation score, so unrelated brands on the same stack don't read as linked. Operator-specific signals (favicon, TLS SAN, shared form/booking handle, first-party JS, analytics IDs) carry the most weight.
 
+**Coverage caveat**: sites whose fetch failed or that returned an error status contribute only DNS/TLS/WHOIS signals — none of their HTML, analytics or asset fingerprints were observed. The report lists them under `Coverage: n/N sites reachable` (JSON: `unreachable[]`) and the "looks good" verdict is annotated, so 7 dead sites out of 10 can't masquerade as a well-isolated fleet.
+
 The **isolation score** (0-100, higher = better) uses a normalized penalty formula:
 
 - **Fleet-wide penalties** (shared tracking IDs, cross-cluster violations, DNS verification tokens) apply at full weight: `criticals×25 + highs×10 + mediums×5 + lows×2`
@@ -301,6 +303,7 @@ peep check mysite.com --only tls,robots                  # gates whose scanner d
 ```
 
 Exit 0 only if **all** of:
+- Root URL answers with a non-error status (a 4xx/5xx — e.g. Cloudflare 526 origin-cert error — fails outright; Cloudflare 52x codes are explained in plain words)
 - No adult signals detected (if `--cluster clean`)
 - Site is **not** NOINDEX (indexable by search engines) — unless declared
   pre-launch, see below

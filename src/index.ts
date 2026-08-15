@@ -40,15 +40,17 @@ async function main(): Promise<void> {
   // Warn when a path/query/fragment is silently dropped — peep audits the apex
   // only, so scanning "example.com/de" would otherwise return apex data mislabeled
   // as a /de audit. (stderr, so JSON output on stdout stays clean.)
-  domains.forEach((raw, i) => {
-    const path = strippedPath(raw);
-    if (path) {
-      console.error(
-        `Note: "${raw}" includes a path ("${path}") that peep can't audit — ` +
-        `scanning the apex ${normalizedDomains[i]} instead. Per-page audits aren't supported.`,
-      );
-    }
-  });
+  if (command !== 'diff') { // diff's positionals are files, not domains
+    domains.forEach((raw, i) => {
+      const path = strippedPath(raw);
+      if (path) {
+        console.error(
+          `Note: "${raw}" includes a path ("${path}") — peep scans the apex ${normalizedDomains[i]}. ` +
+          `To audit that route, pass it via --pages ${path}.`,
+        );
+      }
+    });
+  }
 
   switch (command) {
     case 'scan':
@@ -75,11 +77,11 @@ async function main(): Promise<void> {
       await cmdReport(normalizedDomains, config, flags);
       break;
 
-    case 'diff': {
-      const diffArgs = process.argv.slice(3).filter((a) => !a.startsWith('-'));
-      await cmdDiff(diffArgs[0] ?? '', diffArgs[1] ?? '', flags);
+    case 'diff':
+      // Positionals as parsed (flag values already consumed) — the old
+      // argv filter would have taken `-o report.json`'s value as a file.
+      await cmdDiff(domains[0] ?? '', domains[1] ?? '', flags);
       break;
-    }
 
     case 'check':
       if (normalizedDomains.length === 0) {

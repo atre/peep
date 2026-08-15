@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { CliArgs } from './types.js';
 
 const COMMANDS = ['scan', 'fleet', 'correlate', 'classify', 'report', 'diff', 'check', 'help', 'version'] as const;
@@ -231,5 +233,15 @@ EXAMPLES
 }
 
 export function printVersion(): void {
-  console.log('peep 0.1.0');
+  console.log(`peep ${PKG_VERSION}`);
 }
+
+/** Read once from package.json so `peep version` can't drift from the release. */
+const PKG_VERSION: string = (() => {
+  try {
+    const pkgPath = fileURLToPath(new URL('../package.json', import.meta.url));
+    return (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string }).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();

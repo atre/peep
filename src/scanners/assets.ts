@@ -35,16 +35,22 @@ export async function scanAssets(domain: string, html: string, config: ScanningC
   };
 
   // Favicon
-  const faviconHref = extractFaviconUrl(html) ?? '/favicon.ico';
-  const faviconUrl = resolveUrl(domain, faviconHref, config.scheme);
-  result.faviconUrl = faviconUrl;
+  // faviconUrl is only recorded when the file actually exists — the implicit
+  // /favicon.ico fallback used to be reported as the favicon even on a 404.
+  const declaredFavicon = extractFaviconUrl(html);
+  const faviconUrl = resolveUrl(domain, declaredFavicon ?? '/favicon.ico', config.scheme);
   try {
     const resp = await guardedFetch(faviconUrl, domain, config);
     if (resp?.ok) {
       const buf = await readCappedBuffer(resp, MAX_ASSET_BYTES);
+      result.faviconUrl = faviconUrl;
       result.faviconHash = shortHash(buf.toString('base64'));
+    } else if (declaredFavicon) {
+      result.faviconUrl = faviconUrl; // declared but broken — worth showing
     }
-  } catch {}
+  } catch {
+    if (declaredFavicon) result.faviconUrl = faviconUrl;
+  }
 
   // External CSS files — always fetch content for font extraction; hash content or URL per config
   const cssUrls = extractAll(html, /<link[^>]+href=['"]([^'"]+\.css[^'"]*)['"]/gi);

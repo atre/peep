@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, expandScanners, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
-import { c, getCluster, scoreColor, isAdultCluster } from '../utils.js';
+import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
 
 const DEFAULT_SECURITY_THRESHOLD = 50;
 
@@ -39,6 +39,16 @@ export function evaluateCheck(
 
   const clusterName = opts.clusterOverride ?? getCluster(domain, clusters);
   const isCleanCluster = clusterName && !isAdultCluster(clusterName);
+
+  // Check 0: the site actually answers. A 5xx (or a 4xx on the root path) is
+  // an outage/misconfig, and every other gate would otherwise be evaluated
+  // against the error page — a Cloudflare 526 page can score 27/100 on
+  // security and PASS a lenient threshold while the site is down. Listed
+  // first because it is the root cause of whatever follows.
+  if (isErrorStatus(scanResult.http?.statusCode)) {
+    const code = scanResult.http!.statusCode;
+    failures.push(`HTTP ${code} — ${describeHttpStatus(code)}`);
+  }
 
   // Check 1: no adult signals on clean cluster
   if (isCleanCluster && scanResult.content?.isAdult) {
@@ -176,8 +186,13 @@ export async function cmdCheck(
 
   // Show key metrics
   console.log('');
-  const adultStatus = scanResult.content?.isAdult ? c('red', 'ADULT') : c('green', 'CLEAN');
-  const indexStatus = scanResult.isNoindex
+  const adultStatus = scanResult.content
+    ? (scanResult.content.isAdult ? c('red', 'ADULT') : c('green', 'CLEAN'))
+    : c('dim', 'n/a');
+  const httpStatus = scanResult.http?.statusCode;
+  const indexStatus = isErrorStatus(httpStatus)
+    ? c('red', `DOWN (HTTP ${httpStatus})`)
+    : scanResult.isNoindex
     ? (expectNoindex ? c('green', 'NOINDEX (pre-launch, expected)') : c('yellow', 'NOINDEX'))
     : c('green', 'LIVE');
   const secStatus = scanResult.security

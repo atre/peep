@@ -1,7 +1,7 @@
 import { scanDomain } from '../scanners/index.js';
 import { mapConcurrent } from '../concurrency.js';
 import type { PeepConfig, ScanResult, OutputFormat } from '../types.js';
-import { c, formatDuration, getCluster, resolveScanningConfig, isAdultCluster } from '../utils.js';
+import { c, formatDuration, getCluster, resolveScanningConfig, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
 
 export async function cmdFleet(
   config: PeepConfig,
@@ -45,7 +45,8 @@ export async function cmdFleet(
       const errStr = result.errors.length > 0 ? c('yellow', ` (${result.errors.length} err)`) : '';
       const adultStr = result.content?.isAdult ? c('red', ' [ADULT]') : '';
       const noindexStr = result.isNoindex ? c('yellow', ' [NOINDEX]') : '';
-      console.error(`  [${String(pct).padStart(3)}%] ${domain.padEnd(30)} ${formatDuration(result.duration)}${errStr}${adultStr}${noindexStr}`);
+      const downStr = isErrorStatus(result.http?.statusCode) ? c('red', ` [HTTP ${result.http!.statusCode}]`) : '';
+      console.error(`  [${String(pct).padStart(3)}%] ${domain.padEnd(30)} ${formatDuration(result.duration)}${errStr}${adultStr}${noindexStr}${downStr}`);
     }
 
     return result;
@@ -67,6 +68,16 @@ export async function cmdFleet(
     });
     if (adultOnClean.length > 0) {
       console.error(`  ${c('red', `${adultOnClean.length} clean-cluster sites with adult content!`)}`);
+    }
+
+    const downSites = results.filter((r) => isErrorStatus(r.http?.statusCode));
+    if (downSites.length > 0) {
+      const label = quiet ? '' : '  ';
+      console.error(`${label}${c('red', `${downSites.length} site(s) returning an error status:`)}`);
+      for (const r of downSites) {
+        const code = r.http!.statusCode;
+        console.error(`    ${r.domain.padEnd(30)} HTTP ${code} — ${describeHttpStatus(code)}`);
+      }
     }
 
     const noindexSites = results.filter((r) => r.isNoindex);

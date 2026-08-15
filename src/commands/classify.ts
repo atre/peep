@@ -1,7 +1,7 @@
 import { scanDomain } from '../scanners/index.js';
 import { mapConcurrent } from '../concurrency.js';
 import type { PeepConfig, OutputFormat } from '../types.js';
-import { c, severityColor, getCluster, writeOutputFile, isAdultCluster } from '../utils.js';
+import { c, severityColor, getCluster, writeOutputFile, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
 
 export async function cmdClassify(
   domains: string[],
@@ -33,6 +33,11 @@ export async function cmdClassify(
   // classify only has a structured (JSON) serialization, used for both --out and -j
   const output = results.map((r) => ({
     domain: r.domain,
+    // A site that never answered is not "CLEAN, score 0" — flag it so JSON
+    // consumers don't treat an outage as a clean verdict.
+    classified: r.content != null,
+    error: r.content ? null : (r.errors.find((e) => e.scanner === 'http')?.error
+      ?? (isErrorStatus(r.http?.statusCode) ? `HTTP ${r.http!.statusCode}` : 'no HTML body')),
     isAdult: r.content?.isAdult ?? false,
     adultScore: r.content?.adultScore ?? 0,
     signals: r.content?.signals ?? [],
@@ -69,7 +74,11 @@ export async function cmdClassify(
   for (const r of results) {
     const cls = r.content;
     if (!cls) {
-      console.log(`  ${r.domain.padEnd(30)} ${c('yellow', 'SCAN FAILED')}`);
+      // Say why — "SCAN FAILED" alone hides an outage behind a scanner shrug.
+      const httpErr = r.errors.find((e) => e.scanner === 'http')?.error;
+      const status = r.http?.statusCode;
+      const why = httpErr ? httpErr : isErrorStatus(status) ? `HTTP ${status} — ${describeHttpStatus(status)}` : 'no HTML body';
+      console.log(`  ${r.domain.padEnd(30)} ${c('yellow', 'NOT CLASSIFIED')} ${c('dim', `(${why})`)}`);
       continue;
     }
 

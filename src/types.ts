@@ -298,6 +298,11 @@ export interface CorrelationFinding {
 export interface CorrelationReport {
   timestamp: string;
   domains: string[];
+  /** Domains whose HTTP fetch failed or returned an error status — their
+   *  content-level signals (HTML, analytics, assets, security) were never
+   *  observed, so an isolation score over them is only DNS/TLS/WHOIS-deep.
+   *  Optional for backwards-compatible JSON. */
+  unreachable?: Array<{ domain: string; reason: string }>;
   findings: CorrelationFinding[];
   score: number;
   matrix: Record<string, Record<string, number>>;

@@ -47,7 +47,9 @@ export async function cmdCorrelate(
     } else if (report.score < config.thresholds.correlationWarning) {
       console.log(c('yellow', `\nExit code 1: Isolation score ${report.score}/100 below warning threshold ${config.thresholds.correlationWarning}`));
     } else {
-      console.log(c('green', `\nFleet isolation score: ${report.score}/100 — looks good`));
+      const down = report.unreachable?.length ?? 0;
+      const caveat = down > 0 ? c('yellow', ` (${down} of ${report.domains.length} sites unreachable — content-level correlation not evaluated for them)`) : '';
+      console.log(c('green', `\nFleet isolation score: ${report.score}/100 — looks good`) + caveat);
     }
   }
 

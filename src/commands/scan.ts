@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, ScanResult, OutputFormat, RobotsTxtSummary, SecurityTxtSummary } from '../types.js';
-import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster } from '../utils.js';
+import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster, describeHttpStatus, isErrorStatus } from '../utils.js';
 
 export async function cmdScan(
   domains: string[],
@@ -46,7 +46,8 @@ export async function cmdScan(
       const errCount = result.errors.length;
       const errStr = errCount > 0 ? ` ${c('yellow', `(${errCount} errors)`)}` : '';
       const noindexStr = result.isNoindex ? ` ${c('yellow', '[NOINDEX]')}` : '';
-      console.log(` done in ${formatDuration(result.duration)}${errStr}${noindexStr}`);
+      const downStr = isErrorStatus(result.http?.statusCode) ? ` ${c('red', `[HTTP ${result.http!.statusCode}]`)}` : '';
+      console.log(` done in ${formatDuration(result.duration)}${errStr}${noindexStr}${downStr}`);
       printScanResult(result, config, verbose);
     }
   }
@@ -76,6 +77,14 @@ export async function cmdScan(
 
 function printScanResult(result: ScanResult, config: PeepConfig, verbose = false): void {
   console.log('');
+
+  // Error response (prominent) — everything below reflects the error page,
+  // not the site: security score is Cloudflare's, SEO is 0, content is empty.
+  if (isErrorStatus(result.http?.statusCode)) {
+    const code = result.http!.statusCode;
+    console.log(c('red', `  ✗ HTTP ${code} — ${describeHttpStatus(code)}`));
+    console.log(c('dim', '    Scores below describe the error response, not the site.'));
+  }
 
   // Noindex status (prominent)
   if (result.isNoindex) {
@@ -223,7 +232,12 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
   // Assets
   if (result.assets) {
     console.log(c('bold', '  Assets'));
-    if (result.assets.faviconUrl) console.log(`    Favicon: ${shortenUrl(result.assets.faviconUrl)} (hash: ${result.assets.faviconHash ?? 'n/a'})`);
+    if (result.assets.faviconUrl) {
+      const hash = result.assets.faviconHash ? `hash: ${result.assets.faviconHash}` : c('yellow', 'declared but not fetchable');
+      console.log(`    Favicon: ${shortenUrl(result.assets.faviconUrl)} (${hash})`);
+    } else {
+      console.log(`    Favicon: ${c('dim', 'none')}`);
+    }
     console.log(`    CSS files: ${result.assets.cssHashes.length}${result.assets.cssHashes.length > 0 ? ` — ${result.assets.cssHashes.map((h) => shortenUrl(h.url)).join(', ')}` : ''}`);
     console.log(`    JS files: ${result.assets.jsHashes.length}${result.assets.jsHashes.length > 0 ? ` — ${result.assets.jsHashes.map((h) => shortenUrl(h.url)).join(', ')}` : ''}`);
     if (result.assets.fontFamilies.length) console.log(`    Fonts: ${result.assets.fontFamilies.join(', ')}`);

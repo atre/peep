@@ -134,3 +134,12 @@ test('defaults: scanned flags omitted → both sources evaluated', () => {
   const robotsCheck = r.checks.find((c) => c.name === 'robots.txt');
   assert.ok(robotsCheck, 'robots.txt evaluated by default');
 });
+
+test('no twitter:* tags at all → "missing", not "partially configured"', () => {
+  const html = { title: 'A perfectly sized page title for testing', metaDescription: null, metaRobots: null, metaViewport: null,
+    metaGenerator: null, htmlLang: 'en', canonicalUrl: null, ogTags: {}, twitterCards: {}, headStructureHash: 'x',
+    bodyStructureHash: 'x', scriptSources: [], stylesheetSources: [], inlineScriptHashes: [], comments: [], jsonLd: [], formEndpoints: [] } as never;
+  const r = scanSeo({ html, robots: null, robotsScanned: false });
+  const tw = r.checks.find((ch) => ch.name === 'Twitter Card')!;
+  assert.equal(tw.rating, 'missing');
+});

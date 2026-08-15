@@ -137,3 +137,9 @@ test('without --only, a missing security result still fails the gate (0/100)', (
   const r = evaluateCheck('example.com', scan({ security: null }), {}, opts());
   assert.ok(r.failures.some((f) => f.includes('Security score 0/100')));
 });
+
+test('an error status fails the gate even when every other check passes', () => {
+  const http = { statusCode: 526, headers: {}, serverHeader: 'cloudflare', poweredBy: null, timing: 10, redirectChain: [], setCookies: [], finalUrl: 'https://example.com/', xRobotsTag: null };
+  const r = evaluateCheck('example.com', scan({ http: http as never }), {}, opts());
+  assert.ok(r.failures.some((f) => f.startsWith('HTTP 526 — Cloudflare: origin TLS certificate invalid')));
+});

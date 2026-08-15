@@ -99,7 +99,9 @@ export function scanSeo(input: SeoInput): SeoResult {
     // ── Twitter Cards ──
     const twWeight = 5;
     maxPoints += twWeight;
-    if (html?.twitterCards) {
+    // `twitterCards` is always an object — `{}` was truthy and every page with
+    // zero twitter:* tags scored as "partially configured".
+    if (html?.twitterCards && Object.keys(html.twitterCards).length > 0) {
       const tw = html.twitterCards;
       const hasCard = tw['twitter:card'];
       const hasTitle = tw['twitter:title'];

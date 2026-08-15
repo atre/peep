@@ -1,4 +1,5 @@
 import type { CorrelationFinding, CorrelationReport, ScanResult } from '../types.js';
+import { describeHttpStatus, isErrorStatus } from '../utils.js';
 
 export function buildReport(
   results: ScanResult[],
@@ -16,11 +17,26 @@ export function buildReport(
   return {
     timestamp: new Date().toISOString(),
     domains: results.map((r) => r.domain),
+    unreachable: unreachableDomains(results),
     findings,
     score,
     matrix,
     summary,
   };
+}
+
+/** Domains whose site content was never observed (fetch error or error status). */
+export function unreachableDomains(results: ScanResult[]): Array<{ domain: string; reason: string }> {
+  const out: Array<{ domain: string; reason: string }> = [];
+  for (const r of results) {
+    const httpErr = r.errors.find((e) => e.scanner === 'http');
+    if (httpErr) { out.push({ domain: r.domain, reason: httpErr.error }); continue; }
+    if (isErrorStatus(r.http?.statusCode)) {
+      const code = r.http!.statusCode;
+      out.push({ domain: r.domain, reason: `HTTP ${code} — ${describeHttpStatus(code)}` });
+    }
+  }
+  return out;
 }
 
 // Fleet-wide finding types are already deduplicated and represent fleet-level problems.
@@ -168,6 +184,13 @@ export function formatReportText(report: CorrelationReport): string {
   lines.push(`Scan time: ${report.timestamp}`);
   lines.push(`Domains: ${report.domains.length}`);
   lines.push(`Isolation score: ${report.score}/100`);
+  const unreachable = report.unreachable ?? [];
+  if (unreachable.length > 0) {
+    // Without this, a fleet where 7 of 10 sites are down reads "93/100 — looks
+    // good": the down sites simply had no HTML/analytics/asset signals to share.
+    lines.push(`Coverage: ${report.domains.length - unreachable.length}/${report.domains.length} sites reachable — content signals NOT evaluated for:`);
+    for (const u of unreachable) lines.push(`  ${u.domain.padEnd(30)} ${u.reason}`);
+  }
   lines.push('');
 
   // Summary
