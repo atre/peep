@@ -1,4 +1,4 @@
-import { scanDomain } from '../scanners/index.js';
+import { scanDomain, validateScannerNames, expandScanners, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
 import { c, getCluster, scoreColor, isAdultCluster } from '../utils.js';
 
@@ -12,6 +12,9 @@ export interface CheckGateOptions {
    *  a PASS annotated in `notes`. Must be threaded in explicitly per call — never
    *  defaulted from config, or a forgotten noindex after launch would go silent. */
   expectNoindex: boolean;
+  /** Scanner subset the scan was run with (`--only`). Gates that depend on a
+   *  scanner that was deliberately not run are skipped and noted, not failed. */
+  only?: string[];
 }
 
 export interface CheckGateResult {
@@ -58,19 +61,30 @@ export function evaluateCheck(
     }
   }
 
+  const selected = opts.only ? new Set(expandScanners(opts.only)) : null;
+  const ran = (name: string) => !selected || selected.has(name);
+
   // Check 3: security score >= threshold
-  const secScore = scanResult.security?.score ?? 0;
-  if (secScore < opts.securityThreshold) {
-    failures.push(
-      `Security score ${secScore}/100 is below threshold ${opts.securityThreshold} — fix security headers`,
-    );
+  if (ran('security')) {
+    const secScore = scanResult.security?.score ?? 0;
+    if (secScore < opts.securityThreshold) {
+      failures.push(
+        `Security score ${secScore}/100 is below threshold ${opts.securityThreshold} — fix security headers`,
+      );
+    }
+  } else {
+    notes.push('security score not evaluated (excluded by --only)');
   }
 
   // Check 4: security.txt required
-  if (opts.requireSecurityTxt && !scanResult.robots?.securityTxt) {
-    failures.push(
-      `security.txt not found — required by --require-security-txt`,
-    );
+  if (opts.requireSecurityTxt) {
+    if (!ran('robots')) {
+      notes.push('security.txt not checked (robots excluded by --only)');
+    } else if (!scanResult.robots?.securityTxt) {
+      failures.push(
+        `security.txt not found — required by --require-security-txt`,
+      );
+    }
   }
 
   // Check 5: no critical scan errors
@@ -98,7 +112,17 @@ export async function cmdCheck(
   // (site public for a payment-provider review but kept noindex until go-live).
   // Deliberately NOT readable from .peeprc — a config default could mask a
   // forgotten noindex after the site actually launches.
-  const expectNoindex = flags.prelaunch === true || String(flags.expect ?? '').toLowerCase() === 'noindex';
+  const expectNoindex = flags.prelaunch === true || flags['allow-noindex'] === true || String(flags.expect ?? '').toLowerCase() === 'noindex';
+  // --only narrows the gate's scan the same way it narrows `scan`. WHOIS is
+  // skipped by default (slow), but an explicit `--only whois` asks for it.
+  const only = flags.only ? String(flags.only).split(',') : undefined;
+  if (only) {
+    const unknown = validateScannerNames(only);
+    if (unknown.length > 0) {
+      console.error(`Warning: unknown scanner(s) in --only: ${unknown.join(', ')}. Known: ${SELECTABLE_SCANNERS.join(', ')}`);
+    }
+  }
+  const skipWhois = !(only?.includes('whois') ?? false);
 
   if (format === 'text') {
     process.stdout.write(`Checking ${c('cyan', domain)}...`);
@@ -107,8 +131,9 @@ export async function cmdCheck(
   const scanResult = await scanDomain(domain, {
     config: config.scanning,
     adultScoreThreshold: config.thresholds.adultScore,
-    skipWhois: true,
+    skipWhois,
     skipAssets: true,
+    only,
   });
 
   if (format === 'text') {
@@ -120,6 +145,7 @@ export async function cmdCheck(
     securityThreshold,
     requireSecurityTxt,
     expectNoindex,
+    only,
   });
   const secScore = scanResult.security?.score ?? 0;
 
@@ -154,8 +180,10 @@ export async function cmdCheck(
   const indexStatus = scanResult.isNoindex
     ? (expectNoindex ? c('green', 'NOINDEX (pre-launch, expected)') : c('yellow', 'NOINDEX'))
     : c('green', 'LIVE');
-  const secStatus = c(scoreColor(secScore, securityThreshold), String(secScore));
-  console.log(`  Content: ${adultStatus}  |  Index: ${indexStatus}  |  Security: ${secStatus}/100`);
+  const secStatus = scanResult.security
+    ? `${c(scoreColor(secScore, securityThreshold), String(secScore))}/100`
+    : c('dim', 'n/a');
+  console.log(`  Content: ${adultStatus}  |  Index: ${indexStatus}  |  Security: ${secStatus}`);
   if (clusterName) console.log(`  Cluster: ${clusterName}`);
   if (notes.length > 0) {
     for (const n of notes) console.log(`  ${c('dim', `note: ${n}`)}`);

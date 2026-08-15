@@ -86,14 +86,16 @@ export async function cmdClassify(
     const prefix = violation ? c('red', 'VIOLATION ') : '  ';
     console.log(`${prefix}${r.domain.padEnd(30)} ${label} (${scoreStr}) ${clusterStr}`);
 
-    // Show signals for adult or violations
-    if (cls.isAdult || violation) {
-      for (const s of cls.signals.slice(0, 5)) {
+    // Show signals: all (top 5) for adult/violations; the top 3 for CLEAN too,
+    // so a reader can see *what* scored without re-running `scan`.
+    const shown = cls.isAdult || violation ? 5 : 3;
+    if (cls.signals.length > 0) {
+      for (const s of cls.signals.slice(0, shown)) {
         const col = severityColor(s.severity);
-        console.log(`    ${c(col, `[${s.severity}]`)} ${s.type}: ${s.value}`);
+        console.log(`    ${c(col, `[${s.severity}]`)} ${s.type}: ${s.value}${s.location ? c('dim', ` — ${s.location}`) : ''}`);
       }
-      if (cls.signals.length > 5) {
-        console.log(`    ... +${cls.signals.length - 5} more signals`);
+      if (cls.signals.length > shown) {
+        console.log(`    ${c('dim', `... +${cls.signals.length - shown} more signal(s)`)}`);
       }
     }
 

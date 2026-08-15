@@ -88,3 +88,11 @@ test('GitHub Pages detected from CNAME to github.io', () => {
   assert.ok(gh);
   assert.equal(gh.confidence, 95);
 });
+
+test('cf-cache-status alone does not make a Cloudflare-proxied origin "Cloudflare Pages"', () => {
+  // Hetzner + Docker behind the orange cloud: cf-ray, server: cloudflare and
+  // cf-cache-status are all present, but nothing Pages-specific is.
+  const result = scanTech('<div>app</div>', { server: 'cloudflare', 'cf-ray': 'abc', 'cf-cache-status': 'DYNAMIC' }, null, null);
+  assert.equal(result.technologies.find((t) => t.name === 'Cloudflare Pages'), undefined);
+  assert.ok(result.technologies.find((t) => t.name === 'Cloudflare'));
+});

@@ -100,8 +100,9 @@ test('font-family extraction from CSS text', () => {
   `;
   const decls = css.match(/font-family\s*:\s*([^;}{]+)/gi) ?? [];
   const families = cleanFontFamilies(decls.map((m) => m.replace(/font-family\s*:\s*/i, '')));
-  // Quotes stripped, no @font-face quirks, deduped real names.
-  assert.deepEqual(families, ['Inter Variable', 'JetBrains Mono', 'monospace', 'var(--font-sans)']);
+  // Quotes stripped, no @font-face quirks, deduped real names. Generic families
+  // (monospace) and var() references carry no fingerprint value and are dropped.
+  assert.deepEqual(families, ['Inter Variable', 'JetBrains Mono']);
 });
 
 test('splitTopLevelCommas keeps var() and quoted commas intact', () => {
@@ -111,26 +112,22 @@ test('splitTopLevelCommas keeps var() and quoted commas intact', () => {
   );
 });
 
-test('cleanFontFamilies untangles Tailwind v4 var() chains', () => {
+test('cleanFontFamilies drops Tailwind v4 var() chains and system fallbacks', () => {
   // Real-world garbling: top-level var() refs, a nested var() with a doubled
-  // comma, quoted emoji families, and stray empty tokens.
+  // comma, quoted emoji families, and stray empty tokens. None of it names a
+  // real family — only "Archivo Black" should survive.
   const raw =
-    'var(--font-sans), var(--font-mono), var(--default-font-family, ui-sans-serif, system-ui, sans-serif,, "Apple Color Emoji"), , Arial';
+    'var(--font-sans), var(--font-mono), var(--default-font-family, ui-sans-serif, system-ui, sans-serif,, "Apple Color Emoji"), , Arial, "Archivo Black", -apple-system, BlinkMacSystemFont';
   const families = cleanFontFamilies([raw]);
-  // var() refs preserved whole (not truncated, no shredded fallbacks leaking out).
-  assert.ok(families.includes('var(--font-sans)'));
-  assert.ok(families.includes('var(--font-mono)'));
-  assert.ok(families.includes('Arial'));
-  // No empty tokens from the doubled / trailing commas, no leftover quotes.
-  assert.ok(!families.some((f) => f === '' || /^['"]|['"]$/.test(f)));
-  // The nested var() stays as one token rather than spilling its fallbacks.
-  assert.ok(families.some((f) => f.startsWith('var(--default-font-family')));
+  assert.deepEqual(families, ['Archivo Black']);
+  // Nested var() must not spill its fallbacks as separate tokens either.
+  assert.ok(!families.some((f) => f.includes('var(') || f === 'system-ui' || f === 'ui-sans-serif'));
 });
 
 test('cleanFontFamilies handles inline style values without truncating at quotes', () => {
   // Mimics what the scanner feeds in after extracting a style="" attribute body.
-  const families = cleanFontFamilies(["'Times New Roman', Georgia, serif"]);
-  assert.deepEqual(families, ['Times New Roman', 'Georgia', 'serif']);
+  const families = cleanFontFamilies(["'Playfair Display', 'Times New Roman', Georgia, serif"]);
+  assert.deepEqual(families, ['Playfair Display']);
 });
 
 test('font source URL extraction from CSS', () => {

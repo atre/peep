@@ -6,3 +6,6 @@ CLAUDE.local.md
 .claude/settings.local.json
 .claude/worktrees/
 .claude/settings.json
+
+# dogfooding notes from other (private) projects — local only
+FEEDBACK.md

@@ -227,3 +227,15 @@ test('duplicate form endpoints deduplicated', () => {
   const formspreeEndpoints = r.formEndpoints.filter((e) => e.includes('formspree.io'));
   assert.equal(formspreeEndpoints.length, 1, 'Should deduplicate same endpoint');
 });
+
+test('framework marker comments (React/Next Suspense, Angular anchors) are not counted as comments', () => {
+  const html = `<html><body>
+    <!--$--><div>a</div><!--/$-->
+    <!--$?--><template></template><!--/$-->
+    <!--$!--><!-- --><!---->
+    <!--[--><span></span><!--]-->
+    <!-- TODO: remove legacy tracking before launch -->
+  </body></html>`;
+  const r = scanHtml(html);
+  assert.deepEqual(r.comments, ['TODO: remove legacy tracking before launch']);
+});

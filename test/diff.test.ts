@@ -112,3 +112,32 @@ test('identical inputs yield no changes', () => {
   const r = buildDiff(a, b, 'a', 'b');
   assert.equal(r.changes.length, 0);
 });
+
+test('security/SEO score drift and per-page audit regressions are reported; volatile fields are not', () => {
+  const good = { name: 'Open Graph', present: true, value: '4/4', rating: 'good' as const, detail: 'ok' };
+  const bad = { name: 'Open Graph', present: true, value: '3/4', rating: 'warning' as const, detail: 'Missing: og:image' };
+  const page = (over: Partial<NonNullable<ScanResult['pageAudits']>[number]>) => ({
+    route: '/de', url: 'https://a.com/de', statusCode: 200, ok: true, title: 't', htmlLang: 'de',
+    canonicalUrl: 'https://a.com/de', isNoindex: false, hreflang: [], seoScore: 87, seoIssues: [], formEndpoints: [], ...over,
+  });
+  const before = scan('a.com', {
+    timestamp: '2026-01-01T00:00:00.000Z', duration: 100,
+    security: { score: 90, headers: [], formProviders: [] },
+    seo: { score: 100, checks: [good], evaluated: 1, total: 12 },
+    pageAudits: [page({})],
+  });
+  const after = scan('a.com', {
+    timestamp: '2026-02-01T00:00:00.000Z', duration: 900,
+    security: { score: 90, headers: [], formProviders: [] },
+    seo: { score: 87, checks: [bad], evaluated: 1, total: 12 },
+    pageAudits: [page({ seoScore: 79, seoIssues: [bad] })],
+  });
+  const r = buildDiff(input([before]), input([after]), 'a', 'b');
+  const details = r.changes.map((ch) => ch.detail);
+  assert.ok(details.some((d) => d.includes('SEO score 100 → 87 (regressed)')));
+  assert.ok(details.some((d) => d.includes('a.com: SEO check now failing — Open Graph: Missing: og:image')));
+  assert.ok(details.some((d) => d.includes('a.com/de: SEO check now failing — Open Graph')));
+  assert.ok(details.some((d) => d.includes('/de SEO score 87 → 79')));
+  assert.ok(!details.some((d) => /timestamp|duration|security score/.test(d)), 'unchanged/volatile fields must not appear');
+  assert.equal(r.summary.changed, r.changes.length);
+});

@@ -121,3 +121,19 @@ test('non-critical scanner errors (e.g. whois) do not fail the gate', () => {
   const r = evaluateCheck('example.com', scan({ errors: [{ scanner: 'whois', error: 'timeout' }] }), {}, opts());
   assert.deepEqual(r.failures, []);
 });
+
+test('--only without security skips the score gate and notes it instead of failing on 0/100', () => {
+  const r = evaluateCheck('example.com', scan({ security: null }), {}, opts({ only: ['tls', 'robots'] }));
+  assert.deepEqual(r.failures, []);
+  assert.ok(r.notes.some((n) => n.includes('security score not evaluated')));
+});
+
+test('--only whois,tls,robots with --require-security-txt still checks robots (it ran)', () => {
+  const r = evaluateCheck('example.com', scan({ security: null, robots: null }), {}, opts({ only: ['whois', 'tls', 'robots'], requireSecurityTxt: true }));
+  assert.ok(r.failures.some((f) => f.includes('security.txt not found')));
+});
+
+test('without --only, a missing security result still fails the gate (0/100)', () => {
+  const r = evaluateCheck('example.com', scan({ security: null }), {}, opts());
+  assert.ok(r.failures.some((f) => f.includes('Security score 0/100')));
+});

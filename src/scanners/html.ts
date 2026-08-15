@@ -181,13 +181,26 @@ function extractInlineHashes(html: string, pattern: RegExp): string[] {
   return hashes;
 }
 
+/**
+ * True for comments that carry human-readable content. Framework markers —
+ * React/Next Suspense & hydration boundaries (`<!--$-->`, `<!--/$-->`,
+ * `<!--$?-->`, `<!--$!-->`), Angular/Vue anchors (`<!---->`, `<!--[-->`,
+ * `<!--]-->`), whitespace-only comments — are emitted on every page of the
+ * framework and leak nothing, so they must not count as an OPSEC signal nor as
+ * a shared-comment correlation hit. Anything without a run of ≥3 letters is
+ * treated as a marker.
+ */
+export function isMeaningfulComment(comment: string): boolean {
+  return /[A-Za-z\u00C0-\u024F\u0400-\u04FF]{3,}/.test(comment);
+}
+
 function extractComments(html: string): string[] {
   const comments: string[] = [];
   const re = /<!--([\s\S]*?)-->/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
     const comment = match[1]?.trim();
-    if (comment && comment.length > 0) comments.push(comment);
+    if (comment && isMeaningfulComment(comment)) comments.push(comment);
   }
   return comments;
 }

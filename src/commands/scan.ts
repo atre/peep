@@ -1,5 +1,5 @@
 import { scanDomain, validateScannerNames, SELECTABLE_SCANNERS } from '../scanners/index.js';
-import type { PeepConfig, ScanResult, OutputFormat } from '../types.js';
+import type { PeepConfig, ScanResult, OutputFormat, RobotsTxtSummary, SecurityTxtSummary } from '../types.js';
 import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster } from '../utils.js';
 
 export async function cmdScan(
@@ -239,10 +239,10 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
   // Robots / well-known files
   if (result.robots) {
     console.log(c('bold', '  Robots & Well-Known'));
-    console.log(`    robots.txt: ${result.robots.robotsTxt ? c('green', 'present') : c('dim', 'absent')}${result.robots.robotsTxtHash ? ` (hash: ${result.robots.robotsTxtHash})` : ''}`);
+    console.log(`    robots.txt: ${result.robots.robotsTxt ? c('green', 'present') : c('dim', 'absent')}${result.robots.robotsTxtHash ? ` (hash: ${result.robots.robotsTxtHash})` : ''}${formatRobotsSummary(result.robots.robotsSummary)}`);
     if (result.robots.sitemapUrls.length) console.log(`    Sitemap: ${result.robots.sitemapUrls.join(', ')}`);
     console.log(`    ads.txt: ${result.robots.adsTxt ? c('green', 'present') : c('dim', 'absent')}`);
-    console.log(`    security.txt: ${result.robots.securityTxt ? c('green', 'present') : c('yellow', 'absent')}`);
+    console.log(`    security.txt: ${result.robots.securityTxt ? c('green', 'present') : c('yellow', 'absent')}${formatSecurityTxtSummary(result.robots.securityTxtSummary)}`);
     console.log(`    humans.txt: ${result.robots.humansTxt ? c('green', 'present') : c('dim', 'absent')}`);
   }
 
@@ -263,7 +263,12 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     const scoreLabel = result.seo.score === null
       ? c('dim', 'not evaluated (fetch failed)')
       : c(scoreColor(result.seo.score), `(${result.seo.score}/100)`);
-    console.log(c('bold', '  SEO') + ` ${scoreLabel}`);
+    // A robots-only --only run evaluates 2 of 12 checks; a bare "100/100" there
+    // would get quoted as a full SEO pass. Say how much was actually covered.
+    const partial = result.seo.evaluated < result.seo.total
+      ? ` ${c('yellow', `partial — ${result.seo.evaluated}/${result.seo.total} checks evaluated`)}`
+      : '';
+    console.log(c('bold', '  SEO') + ` ${scoreLabel}${partial}`);
     for (const check of result.seo.checks) {
       const icon = check.rating === 'good' ? c('green', '+') : check.rating === 'warning' ? c('yellow', '~') : check.rating === 'missing' ? c('dim', '-') : c('red', '!');
       console.log(`    ${icon} ${check.name}: ${check.detail}`);
@@ -336,6 +341,12 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
       if (p.formEndpoints.length) {
         console.log(`      Form endpoints: ${p.formEndpoints.map(shortenUrl).join(', ')}`);
       }
+      // The failing checks are what makes "SEO 79/100" actionable — same
+      // +/~/- list the root scan prints, but only the misses.
+      for (const check of p.seoIssues ?? []) {
+        const icon = check.rating === 'warning' ? c('yellow', '~') : check.rating === 'missing' ? c('dim', '-') : c('red', '!');
+        console.log(`      ${icon} ${check.name}: ${check.detail}`);
+      }
     }
   }
 
@@ -348,6 +359,34 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
   }
 
   console.log('');
+}
+
+function formatRobotsSummary(sum: RobotsTxtSummary | undefined): string {
+  if (!sum) return '';
+  const parts: string[] = [];
+  if (sum.blocksAll) parts.push(c('yellow', 'Disallow / (all agents)'));
+  else if (sum.blockedAgents.length) parts.push(`blocks: ${sum.blockedAgents.slice(0, 5).join(', ')}${sum.blockedAgents.length > 5 ? ` +${sum.blockedAgents.length - 5}` : ''}`);
+  if (sum.disallowPaths.length) parts.push(`${sum.disallowPaths.length} disallow path(s): ${sum.disallowPaths.slice(0, 4).join(' ')}${sum.disallowPaths.length > 4 ? ' …' : ''}`);
+  return parts.length ? ` — ${parts.join('; ')}` : '';
+}
+
+function formatSecurityTxtSummary(sum: SecurityTxtSummary | undefined): string {
+  if (!sum) return '';
+  const parts: string[] = [];
+  if (sum.contacts.length) parts.push(`Contact ${sum.contacts.slice(0, 2).join(', ')}`);
+  if (sum.expires) {
+    const d = sum.expiresInDays;
+    let tag = '';
+    if (d === null) tag = c('yellow', 'unparseable');
+    else if (d < 0) tag = c('red', `expired ${Math.abs(d)}d ago`);
+    else if (d > 366) tag = c('yellow', `${d}d — RFC 9116 recommends <1y`);
+    else tag = c('green', `${d}d, ok`);
+    parts.push(`Expires ${sum.expires.slice(0, 10)} (${tag})`);
+  } else {
+    parts.push(c('yellow', 'no Expires (required by RFC 9116)'));
+  }
+  if (sum.hasSignature) parts.push('PGP-signed');
+  return ` — ${parts.join(', ')}`;
 }
 
 function shortenUrl(url: string): string {

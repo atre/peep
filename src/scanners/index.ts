@@ -130,7 +130,12 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
     );
   }
 
-  if (should('whois') && !opts.skipWhois && opts.config.whoisEnabled) {
+  // An explicit `--only whois` outranks `scanning.whoisEnabled: false` in .peeprc —
+  // the config default exists to keep routine fleet scans fast, not to silently
+  // swallow a scanner the user just asked for by name. `--skip-whois` still wins,
+  // but then says so instead of leaving the section silently absent.
+  const whoisExplicit = opts.only?.includes('whois') ?? false;
+  if (should('whois') && !opts.skipWhois && (opts.config.whoisEnabled || whoisExplicit)) {
     phase1.push(
       scanWhois(domain)
         .then((r) => { result.whois = r; })
@@ -144,6 +149,10 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
         .then((r) => { result.robots = r; })
         .catch((e) => { result.errors.push({ scanner: 'robots', error: (e as Error).message }); }),
     );
+  }
+
+  if (whoisExplicit && opts.skipWhois) {
+    result.errors.push({ scanner: 'whois', error: 'skipped — --skip-whois overrides --only whois' });
   }
 
   await Promise.all(phase1);
@@ -296,7 +305,7 @@ async function auditPages(
     const url = resolvePageUrl(domain, route, config.scheme);
     const audit: PageAudit = {
       route, url, statusCode: null, ok: false, title: null, htmlLang: null,
-      canonicalUrl: null, isNoindex: false, hreflang: [], seoScore: null, formEndpoints: [],
+      canonicalUrl: null, isNoindex: false, hreflang: [], seoScore: null, seoIssues: [], formEndpoints: [],
     };
     try {
       const resp = await fetch(url, {
@@ -327,6 +336,7 @@ async function auditPages(
       audit.isNoindex = containsNoindex(pageHtml.metaRobots) || containsNoindex(xRobotsTag);
       audit.hreflang = extractHreflang(html);
       audit.seoScore = seo.score;
+      audit.seoIssues = seo.checks.filter((ch) => ch.rating !== 'good');
       audit.formEndpoints = pageHtml.formEndpoints;
     } catch {
       // Individual route fetch failed — return the shell with ok=false.

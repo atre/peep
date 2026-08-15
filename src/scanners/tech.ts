@@ -226,8 +226,10 @@ const SIGNATURES: TechSignature[] = [
           evidence.push('static site patterns');
         }
 
-        // cf-cache-status present
-        if (ctx.headers['cf-cache-status']) {
+        // cf-cache-status is set on ANY Cloudflare-proxied origin (Hetzner behind
+        // the orange cloud gets it too) — it may only corroborate an existing
+        // Pages signal, never stand alone as evidence.
+        if (ctx.headers['cf-cache-status'] && confidence > 0) {
           confidence = Math.min(100, confidence + 10);
           evidence.push('cf-cache-status');
         }

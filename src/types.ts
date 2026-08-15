@@ -115,6 +115,31 @@ export interface RobotsResult {
   adsTxtPubIds: string[];
   securityTxt: string | null;
   humansTxt: string | null;
+  /** Parsed key facts so the text report can say what the files contain
+   *  instead of just "present" (present since 0.2 — absent in older JSON). */
+  robotsSummary?: RobotsTxtSummary;
+  securityTxtSummary?: SecurityTxtSummary;
+}
+
+export interface RobotsTxtSummary {
+  /** Agents (`User-agent:` values) that have `Disallow: /` — i.e. are blocked entirely. */
+  blockedAgents: string[];
+  /** True when `*` is fully disallowed (site closed to all crawlers). */
+  blocksAll: boolean;
+  /** Distinct Disallow paths (excluding the bare `/`). */
+  disallowPaths: string[];
+  /** Number of `User-agent:` groups. */
+  agentCount: number;
+}
+
+export interface SecurityTxtSummary {
+  contacts: string[];
+  /** Raw `Expires:` value. */
+  expires: string | null;
+  /** Days until `Expires:` (negative = expired), null when unparseable. */
+  expiresInDays: number | null;
+  policy: string | null;
+  hasSignature: boolean;
 }
 
 export interface ContentSignal {
@@ -187,6 +212,12 @@ export interface SeoResult {
    */
   score: number | null;
   checks: SeoCheck[];
+  /** Number of checks actually evaluated (length of `checks`). */
+  evaluated: number;
+  /** Number of checks a full scan would evaluate — when `evaluated < total` the
+   *  score is partial (e.g. a robots-only `--only` run) and must not be quoted
+   *  as a plain "/100". */
+  total: number;
 }
 
 // ── Technology Detection ──
@@ -246,6 +277,9 @@ export interface PageAudit {
   isNoindex: boolean;
   hreflang: HreflangAlternate[];
   seoScore: number | null;
+  /** SEO checks that did not rate `good` on this page — the reason behind
+   *  `seoScore`, so a "79/100" is actionable and diffable across deploys. */
+  seoIssues: SeoCheck[];
   formEndpoints: string[];
 }
 
@@ -312,7 +346,7 @@ export interface ScanningConfig {
 // ── Diff ──
 
 export interface DiffEntry {
-  type: 'new_finding' | 'resolved_finding' | 'new_domain' | 'removed_domain' | 'analytics_change' | 'noindex_change' | 'adult_score_change';
+  type: 'new_finding' | 'resolved_finding' | 'new_domain' | 'removed_domain' | 'analytics_change' | 'noindex_change' | 'adult_score_change' | 'score_change' | 'page_change';
   domain?: string;
   detail: string;
   severity?: Severity;

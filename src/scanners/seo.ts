@@ -202,5 +202,8 @@ export function scanSeo(input: SeoInput): SeoResult {
   // HTTP fetch both html and robots depend on failed) — that's "not evaluated",
   // not a perfect (nor a zero) score. Don't fabricate either.
   const score = maxPoints === 0 ? null : Math.round((points / maxPoints) * 100);
-  return { score, checks };
+  return { score, checks, evaluated: checks.length, total: SEO_TOTAL_CHECKS };
 }
+
+/** Checks a full scan evaluates: 9 HTML-derived + 2 robots-derived + HTTPS. */
+export const SEO_TOTAL_CHECKS = 12;

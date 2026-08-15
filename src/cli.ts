@@ -15,6 +15,7 @@ const BOOLEAN_FLAGS = new Set([
   'skip-content-hash',
   'require-security-txt',
   'prelaunch',
+  'allow-noindex',
   'verbose',
   'quiet',
   'json',
@@ -137,7 +138,8 @@ FLAGS
   --out, -o <file>       Write output to file (scan/classify: always JSON;
                           correlate/report: .json → JSON, else text report)
   --config, -c <path>    Custom .peeprc config path
-  --only <scanners>      Comma-separated scanner list to run
+  --only <scanners>      Comma-separated scanner list to run (scan, fleet, check).
+                          An explicit "whois" here overrides whoisEnabled=false.
   --skip-whois           Skip WHOIS lookups (slow)
   --skip-assets          Skip asset fetching (favicon/CSS/JS downloads)
   --hash-content         Fetch and hash CSS/JS file content (on by default)
@@ -151,7 +153,8 @@ FLAGS
   --cluster <name>       Cluster context for check command (clean|adult)
   --min-score <n>        Minimum security score for check command (default: 50)
   --require-security-txt Fail check if security.txt is absent
-  --expect <state>       check only: --expect noindex (alias: --prelaunch)
+  --expect <state>       check only: --expect noindex (aliases: --prelaunch,
+                          --allow-noindex)
                           converts a noindex failure into a PASS annotated
                           "noindex (declared pre-launch)" — for a site that's
                           public for a payment-provider review but

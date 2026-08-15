@@ -222,8 +222,35 @@ export function cleanFontFamilies(rawValues: string[]): string[] {
         .replace(/^['"]+|['"]+$/g, '')
         .replace(/\s+/g, ' ')
         .trim();
-      if (name) out.add(name);
+      if (name && isRealFontFamily(name)) out.add(name);
     }
   }
   return [...out];
+}
+
+/**
+ * Generic/system families and CSS keywords that every stack declares as
+ * fallbacks. They carry zero fingerprint value and, together with `var(...)`
+ * references, turned the Fonts line into ~600 chars of noise on a Tailwind v4
+ * / Next.js site.
+ */
+const GENERIC_FONT_TOKENS = new Set([
+  'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif',
+  'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'emoji', 'math', 'fangsong',
+  '-apple-system', 'blinkmacsystemfont', 'segoe ui', 'segoe ui emoji', 'segoe ui symbol',
+  'apple color emoji', 'noto color emoji', 'roboto', 'helvetica', 'helvetica neue', 'arial',
+  'liberation mono', 'liberation sans', 'menlo', 'monaco', 'consolas', 'courier new', 'courier',
+  'sfmono-regular', 'sf mono', 'sf pro', 'sf pro text', 'sf pro display', 'times new roman',
+  'times', 'georgia', 'verdana', 'tahoma', 'inherit', 'initial', 'unset', 'revert', 'revert-layer',
+  'noto sans', 'ubuntu', 'cantarell', 'fira sans', 'droid sans', 'oxygen', 'oxygen-sans',
+]);
+
+/** True for a token that names an actual, fingerprint-worthy font family. */
+export function isRealFontFamily(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower.startsWith('var(') || lower.startsWith('env(') || lower.startsWith('--')) return false;
+  if (GENERIC_FONT_TOKENS.has(lower)) return false;
+  // Values that leaked from a broken parse (contain CSS punctuation)
+  if (/[:;{}]/.test(name)) return false;
+  return true;
 }

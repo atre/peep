@@ -140,12 +140,12 @@ peep check example.com --cluster clean
 | | `-j` | Shorthand for `--format json` |
 | `--out <file>` | `-o` | Write output to file. `scan`/`classify` always write JSON; `correlate`/`report` write JSON for a `.json` path, otherwise the text report |
 | `--config <path>` | `-c` | Custom `.peeprc` config path |
-| `--only <scanners>` | | Comma-separated list of scanners to run (also accepts derived `seo`) |
+| `--only <scanners>` | | Comma-separated list of scanners to run (also accepts derived `seo`). Works on `scan`, `fleet` and `check`; an explicit `whois` here overrides `scanning.whoisEnabled: false`. Under a partial run the SEO headline is marked `partial — n/12 checks evaluated` |
 | `--skip-whois` | | Skip WHOIS lookups |
 | `--skip-assets` | | Skip asset fetching (favicon/CSS/JS downloads) |
 | `--hash-content` | | Fetch and hash CSS/JS file content (deeper template fingerprinting; on by default) |
 | `--skip-content-hash` | | Skip CSS/JS content hashing — fingerprint by URL only (overrides the default) |
-| `--pages <n\|routes>` | | Number: fetch top N sitemap pages, following one level of sitemap index (catches form/booking endpoints on subpages). Routes: comma-separated paths (e.g. `/de,/fr`) get a per-page SEO/hreflang audit — for i18n routes a homepage scan can't reach. Works on `scan` and `report` |
+| `--pages <n\|routes>` | | Number: fetch top N sitemap pages, following one level of sitemap index (catches form/booking endpoints on subpages). Routes: comma-separated paths (e.g. `/de,/fr`) get a per-page SEO/hreflang audit (score plus the failing checks under each route, also in JSON as `pageAudits[].seoIssues`) — for i18n routes a homepage scan can't reach. Works on `scan` and `report` |
 | | `-v` | Verbose output (scanner timing + raw data sections) |
 | | `-q` | Quiet output (suppress per-domain lines, show summary only) |
 | `--cluster <name>` | | Cluster context for `check` command (`clean` or `adult`) |
@@ -172,9 +172,9 @@ Peep runs 11 scanners across three phases, plus two derived scores (`seo`, `secu
 | `html` | Title, meta/OG tags, Twitter card tags (`twitter:card`, `twitter:image`, etc.), JSON-LD structured data (`@type`, `name`, `sameAs` for cross-site correlation), canonical URL, structure hashes, inline script/style hashes, comments, form/booking endpoints (Formspree, Calendly, Typeform, Tally, etc.); `metaRobots` for noindex detection |
 | `analytics` | GA4, GTM, AdSense, Umami (websiteId), Facebook Pixel, Clarity, Plausible, Cloudflare Analytics, Hotjar, Matomo, ExoClick, JuicyAds; DNS verification tokens |
 | `assets` | Favicon hash, CSS/JS file hashes (URL-based or content-based with `--hash-content`), font families/sources (including CSS `@font-face`), image count (`<img>` + inline `<svg>` + CSS `background-image`), OG/Twitter card images |
-| `robots` | `robots.txt` + affiliate redirect path detection (`/go/`, `/out/`, `/aff/`, etc.); `ads.txt` pub-id parsing; `security.txt`; `humans.txt`; sitemap URLs |
+| `robots` | `robots.txt` (blocked agents, `Disallow /`, disallow paths) + affiliate redirect path detection (`/go/`, `/out/`, `/aff/`, etc.); `ads.txt` pub-id parsing; `security.txt` (contacts, `Expires` with RFC 9116 <1y check, PGP signature); `humans.txt`; sitemap URLs |
 | `content` | Adult keyword scoring (configurable threshold), meta rating, RTA label, affiliate network detection (adult + clean), ad network detection |
-| `security` | Security headers score (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP, COEP, CORP, security.txt, server version disclosure). Informational checks: CORS `Access-Control-Allow-Origin: *` wildcard, HTML comments OPSEC warning, CSP script allowlist cross-reference (scripts loaded from origins not in `script-src`). Also extracts form/booking providers declared in CSP (`calendly.com`, `formspree.io`, …) for fleet correlation |
+| `security` | Security headers score (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP, COEP, CORP, security.txt, server version disclosure). Informational checks: CORS `Access-Control-Allow-Origin: *` wildcard, HTML comments OPSEC warning (framework markers such as React/Next `<!--$-->` hydration boundaries are ignored), CSP script allowlist cross-reference (scripts loaded from origins not in `script-src`). Also extracts form/booking providers declared in CSP (`calendly.com`, `formspree.io`, …) for fleet correlation |
 | `tech` | Stack fingerprinting: frameworks (Next.js, Nuxt, Astro, Gatsby, Hugo, WordPress, etc.), CSS (Tailwind CSS via utility class analysis), CDNs (Cloudflare, Vercel, Netlify, AWS CloudFront), hosting (GitHub Pages, Cloudflare Pages — boosted by CNAME to `*.pages.dev`), servers (Nginx, Apache, Caddy), monitoring (NEL/Report-To network error logging) |
 | `seo` *(derived)* | SEO score over `html` + `robots`: title, meta description, canonical, Open Graph, Twitter card, language, viewport, JSON-LD, robots.txt, sitemap, hreflang, HTTPS. Addressable via `--only seo` (runs its source scanners); checks whose source scanner didn't actually produce a result — not selected under a partial `--only`, *or* selected but its fetch failed — are reported as *not evaluated* rather than failing, and the score itself is `null` ("not evaluated") rather than a fabricated 0 or 100 when nothing at all was evaluated |
 
@@ -284,7 +284,9 @@ peep diff audit-2026-01.json audit-2026-02.json
 peep diff scan-before.json scan-after.json -j
 ```
 
-Shows: new/resolved correlation findings, new/removed domains, analytics ID changes (GA4, AdSense, GTM), noindex status changes (NOINDEX→LIVE or LIVE→NOINDEX), adult score changes >= 10 points.
+Shows: new/resolved correlation findings, new/removed domains, analytics ID changes (GA4, AdSense, GTM), noindex status changes (NOINDEX→LIVE or LIVE→NOINDEX), adult score changes >= 10 points, security-score and SEO-score drift, SEO checks that started/stopped failing, and — for `--pages` route audits present in both files — per-page SEO score, failing checks, canonical and noindex changes (e.g. "/de lost its og:image" between two deploys).
+
+`diff` compares only these semantic fields. Volatile data — timestamps, timings, TLS expiry countdowns, per-build asset hashes — is never compared, so a Next.js redeploy with no real change diffs clean.
 
 ## `peep check` — Deploy Gate
 
@@ -294,6 +296,8 @@ Run as a CI/CD gate before deploying a domain:
 peep check mysite.com --cluster clean
 peep check mysite.com --min-score 70
 peep check mysite.com --require-security-txt
+peep check mysite.com --cluster clean --allow-noindex   # pre-launch: noindex is intentional
+peep check mysite.com --only tls,robots                  # gates whose scanner didn't run are noted, not failed
 ```
 
 Exit 0 only if **all** of:
