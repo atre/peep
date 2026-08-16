@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeRobotsTxt, summarizeSecurityTxt } from '../src/scanners/robots.js';
+import { summarizeRobotsTxt, summarizeSecurityTxt, summarizeHumansTxt } from '../src/scanners/robots.js';
 
 test('robots.txt summary: Disallow / for all agents', () => {
   const s = summarizeRobotsTxt('User-agent: *\nDisallow: /\n');
@@ -42,4 +42,14 @@ test('security.txt summary: expired and unparseable Expires', () => {
   assert.equal(bad.expires, 'soon');
   assert.equal(bad.expiresInDays, null);
   assert.equal(summarizeSecurityTxt('Contact: mailto:a@b.c').expires, null);
+});
+
+test('summarizeHumansTxt: line count plus first Contact/team-lead value', () => {
+  const s = summarizeHumansTxt('/* TEAM */\n  Chef: Jane\n  Contact: jane [at] x.com\n');
+  assert.deepEqual(s, { lines: 3, contact: 'jane [at] x.com', team: 'Jane' });
+});
+
+test('summarizeHumansTxt: no Contact/team lines → nulls, blank lines not counted', () => {
+  const s = summarizeHumansTxt('/* TEAM */\n\n  Site: example.com\n');
+  assert.deepEqual(s, { lines: 2, contact: null, team: null });
 });

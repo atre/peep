@@ -17,6 +17,10 @@ export interface DnsResult {
   dmarc?: DmarcRecord | null;
   /** CAA records as `tag value` strings, e.g. `issue letsencrypt.org`. */
   caa?: string[];
+  /** DKIM TXT records found at common selectors (`google._domainkey.<domain>`
+   *  etc.) — informational, not exhaustive (a sender's actual selector may not
+   *  be in the probed list). Optional: absent in JSON written before 0.2. */
+  dkim?: Array<{ selector: string; raw: string }>;
 }
 
 export interface SpfRecord {
@@ -57,6 +61,9 @@ export interface HttpResult {
   /** URL the final (post-redirect, post-fallback) response came from — its scheme
    *  is the truth for "served over HTTPS", not the scheme we started with. */
   finalUrl: string | null;
+  /** Accept-Language header actually sent, or null when none was sent (the
+   *  default — matches Googlebot, avoids skewing locale-default sites). */
+  acceptLanguage: string | null;
 }
 
 export interface TlsResult {
@@ -82,6 +89,9 @@ export interface WhoisResult {
   registrantCountry: string | null;
   dnssec: string | null;
   raw: string;
+  /** Days until `expiryDate` (negative = expired), null when unparseable or
+   *  absent. Optional: absent in JSON written before this field existed. */
+  expiresIn?: number | null;
 }
 
 export interface JsonLdData {
@@ -111,6 +121,8 @@ export interface HtmlResult {
   comments: string[];
   jsonLd: JsonLdData[];
   formEndpoints: string[];
+  /** Email addresses found via mailto: links or bare text in the page — capped at 20. */
+  emails: string[];
 }
 
 export interface AnalyticsResult {
@@ -151,6 +163,13 @@ export interface RobotsResult {
    *  instead of just "present" (present since 0.2 — absent in older JSON). */
   robotsSummary?: RobotsTxtSummary;
   securityTxtSummary?: SecurityTxtSummary;
+  humansTxtSummary?: HumansTxtSummary;
+}
+
+export interface HumansTxtSummary {
+  lines: number;
+  contact: string | null;
+  team: string | null;
 }
 
 export interface RobotsTxtSummary {
@@ -258,6 +277,9 @@ export interface SeoResult {
    *  score is partial (e.g. a robots-only `--only` run) and must not be quoted
    *  as a plain "/100". */
   total: number;
+  /** Check names deliberately not evaluated because the page is noindex
+   *  (Canonical URL / Hreflang / Structured Data don't apply). */
+  skipped?: string[];
 }
 
 // ── Technology Detection ──
@@ -296,6 +318,27 @@ export interface ScanResult {
   errors: Array<{ scanner: string; error: string }>;
   /** Per-page audits, populated only when `--pages` is given explicit routes. */
   pageAudits?: PageAudit[];
+  /** Email addresses exposed anywhere (DMARC rua/ruf, CAA iodef, security.txt,
+   *  mailto:/body text), for the OPSEC line and cross-site correlation. */
+  exposedIdentifiers?: Array<{ kind: 'email'; value: string; source: string }>;
+  /** Non-good security/SEO/email-auth checks in pulse's fleet-wide Finding
+   *  shape — additive, for tools that fold peep in as site findings. */
+  findings?: Finding[];
+}
+
+/**
+ * Fleet-wide finding shape — the reference contract is pulse's `src/types.ts`
+ * (`id`, `scope`, `severity`, `title`, `detail?`, `hint?`). `scope` is fixed
+ * at `'site'` (pulse's `Scope` union has no per-category values — `seo:`/
+ * `sec:`/`email:` are reserved `id` prefixes there, not scope values), so a
+ * peep-sourced finding type-checks cleanly wherever pulse's Finding does.
+ */
+export interface Finding {
+  id: string;
+  scope: 'site';
+  severity: 'crit' | 'warn';
+  title: string;
+  detail?: string;
 }
 
 export interface HreflangAlternate {
@@ -321,6 +364,11 @@ export interface PageAudit {
    *  `seoScore`, so a "79/100" is actionable and diffable across deploys. */
   seoIssues: SeoCheck[];
   formEndpoints: string[];
+  /** Number of SEO checks actually evaluated on this page (mirrors
+   *  `SeoResult.evaluated`) — lets `seoScore`'s denominator be shown as
+   *  "N/total pass" instead of just the raw score. Optional: absent in JSON
+   *  written before this field existed. */
+  seoEvaluated?: number;
 }
 
 // ── Correlation ──
@@ -386,6 +434,10 @@ export interface ScanningConfig {
    *  resolver returns NXDOMAIN) to this server instead of 1.1.1.1. Unset means
    *  "system default" — resolution behavior is otherwise unchanged. */
   dnsServer?: string;
+  /** --lang <xx>: Accept-Language header value to send. Unset (default) sends
+   *  no Accept-Language at all — matches Googlebot and avoids skewing a
+   *  locale-default site (e.g. a DE-default store) toward its EN variant. */
+  acceptLanguage?: string;
 }
 
 // ── Diff ──
@@ -403,6 +455,10 @@ export interface DiffReport {
   timestamp: string;
   changes: DiffEntry[];
   summary: { added: number; removed: number; changed: number };
+  /** How many semantic fields buildDiff actually compared, and which volatile
+   *  fields (timestamps, timing, per-build hashes) it deliberately ignored —
+   *  so "0 change(s)" reads as "compared and clean", not "compared nothing". */
+  compared?: { fields: number; ignored: string[] };
 }
 
 // ── Check ──

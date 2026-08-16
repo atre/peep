@@ -150,11 +150,17 @@ peep check example.com --cluster clean
 | `--pages <n\|routes>` | | Number: fetch top N sitemap pages, following one level of sitemap index (catches form/booking endpoints on subpages). Routes: comma-separated paths (e.g. `/de,/fr`) get a per-page SEO/hreflang audit (score plus the failing checks under each route, also in JSON as `pageAudits[].seoIssues`) — for i18n routes a homepage scan can't reach. Works on `scan`, `report` and `check` (where each route becomes a gate) |
 | | `-v` | Verbose output (scanner timing + raw data sections) |
 | | `-q` | Quiet output (suppress per-domain lines, show summary only) |
+| `--brief` | | Red-only output for gates/hooks: ≤ 10 lines per domain — missing/bad checks, HTTP errors, NOINDEX, scan errors; no good/warning lines. Implies `-q`. Works on `scan`, `check`, `fleet` |
+| `--lang <xx>` | | Send `Accept-Language: <xx>` on every fetch (incl. `--pages`). Default sends **no** `Accept-Language` at all (matches Googlebot) — a hardcoded `en-US` would audit a DE-default store's EN variant. The header actually sent is printed under `HTTP` |
+| `--fleet <path>` | | Read `domains` / `pages` from a `fleet.yaml` (default `./fleet.yaml` if present) — schema shared with looksy/texter/trusty: `domains: [...]`, `pages: [...]`, `locales: [...]`, `viewports: [...]`; peep uses only `domains` + `pages`. An explicit `.peeprc` domains list and an explicit `--pages` always win |
 | `--cluster <name>` | | Cluster context for `check` command (`clean` or `adult`) |
 | `--min-score <n>` | | Minimum security score for `check` command (default: 50) |
 | `--require-security-txt` | | Fail `check` if `security.txt` is absent |
 | `--require-email-auth` | | Fail `check` unless SPF is published with a `-all`/`~all` terminal and DMARC with `p=quarantine\|reject` — a transactional-mail domain without them is spoofable and lands in spam |
-| `--expect <state>` | | `check` only. `--expect noindex` (alias `--prelaunch`) converts a noindex failure into a PASS annotated `noindex (declared pre-launch)` — for a site that's public for a payment-provider review but deliberately kept noindex until go-live. Must be passed explicitly per invocation, never a `.peeprc` default, so it can't mask a forgotten noindex after launch |
+| `--min-seo <n>` | | `check` only. Fail if the SEO score of the root page or any `--pages` route is below `n` |
+| `--require-seo <checks>` | | `check` only. Comma-separated SEO check names that must rate *good* on the root page and every `--pages` route, e.g. `"Open Graph,Canonical URL"` |
+| `--expect-hreflang <g>` | | `check` only. Comma-separated `glob:none` pairs, e.g. `/blog/*:none` — routes matching the glob (trailing `*` = prefix match) are deliberately untranslated and exempt from the Hreflang check under `--require-seo` / `--min-seo` |
+| `--expect <state>` | | `check` only. `--expect noindex` (aliases `--prelaunch`, `--allow-noindex`, `--stage pre-launch`) converts a noindex failure into a PASS annotated `noindex (declared pre-launch)` — for a site that's public for a payment-provider review but deliberately kept noindex until go-live. Must be passed explicitly per invocation, never a `.peeprc` default, so it can't mask a forgotten noindex after launch |
 | `--dns <server>` | | Pin DNS resolution to this server (e.g. `1.1.1.1`) instead of the OS resolver — see [DNS Resolution](#dns-resolution) |
 
 ## Scanners
@@ -358,6 +364,11 @@ CAA records and prints a verdict per record:
   `v=spf1 -all`.
 - **DMARC** — `p=reject`/`quarantine` is good; `p=none` (monitoring) and
   `pct<100` are warnings; missing means SPF/DKIM failures are never enforced.
+- **DKIM** — informational: common selectors (`default`, `google`, `resend`,
+  `zoho`, `k1`, `selector1/2`, …) are probed at `<sel>._domainkey.<domain>`;
+  a hit lists the selectors, a miss says which were probed (a sender's real
+  selector may not be in the list, so this never fails `--require-email-auth`).
+  DKIM present + `p=none` adds the hint *safe to move to p=quarantine*.
 
 Beyond posture, these records are **ownership signals** the correlation stage
 uses: the same `rua=` mailbox on two domains is the same mail administrator; an
@@ -388,6 +399,24 @@ treated as untrusted input:
 - **Bounded patterns** — extractor regexes use bounded spans instead of
   unbounded `.*?`, so a crafted page can't drive quadratic matching and stall a
   fleet scan.
+
+## JSON output
+
+`-j` / `--format json` emits the full `ScanResult`. Two additive fields exist
+for fleet tooling (pulse, brief) so every tool reads one shape:
+
+- `findings[]` — every non-good security header, SEO check and SPF/DMARC/DKIM
+  check as `{ id, scope: 'site', severity: 'crit'|'warn', title, detail }`,
+  ids `sec:<domain>/<header>`, `seo:<domain>/<check>`, `email:<domain>/<spf|dmarc|dkim>`
+  (`missing`/`bad` → `crit`, `warning` → `warn`).
+- `whois.expiresIn` — days until the registration expires (negative = expired,
+  `null` when unknown), present whenever the whois scanner ran.
+- `exposedIdentifiers[]` — e-mail addresses seen in DMARC `rua`/`ruf`, CAA
+  `iodef`, `security.txt` and the page itself, with their source.
+
+Volatile fields (`timestamp`, `duration`, `http.timing`, TLS expiry, per-build
+asset hashes) are never compared by `peep diff`; its footer says how many
+fields were compared and which were ignored.
 
 ## Configuration
 

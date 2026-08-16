@@ -239,3 +239,18 @@ test('framework marker comments (React/Next Suspense, Angular anchors) are not c
   const r = scanHtml(html);
   assert.deepEqual(r.comments, ['TODO: remove legacy tracking before launch']);
 });
+
+test('emails: mailto: links and bare addresses in body text, deduped and lowercased', () => {
+  const html = `<html><body>
+    <a href="mailto:Sales@Example.com">Contact sales</a>
+    <p>Or reach support@example.com directly. sales@example.com again.</p>
+  </body></html>`;
+  const r = scanHtml(html);
+  assert.deepEqual(r.emails, ['sales@example.com', 'support@example.com']);
+});
+
+test('emails: capped at 20', () => {
+  const html = `<html><body>${Array.from({ length: 25 }, (_, i) => `<p>user${i}@example.com</p>`).join('')}</body></html>`;
+  const r = scanHtml(html);
+  assert.equal(r.emails.length, 20);
+});

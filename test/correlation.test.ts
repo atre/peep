@@ -96,6 +96,7 @@ function makeHtml(overrides: Partial<HtmlResult> = {}): HtmlResult {
     comments: [],
     jsonLd: [],
     formEndpoints: [],
+    emails: [],
     ...overrides,
   };
 }
@@ -704,6 +705,35 @@ test('same DMARC rua mailbox on 2 sites → high fleet-wide shared-report-mailbo
   assert.ok(f, 'expected shared-report-mailbox');
   assert.equal(f!.severity, 'high');
   assert.deepEqual(f!.domains.sort(), ['a.com', 'b.com']);
+});
+
+test('same exposed contact email on 2 sites (not DMARC/CAA) → high shared-contact-email', () => {
+  const results = [
+    makeScan('a.com', { exposedIdentifiers: [{ kind: 'email', value: 'ops@agency.example', source: 'security.txt Contact' }] }),
+    makeScan('b.com', { exposedIdentifiers: [{ kind: 'email', value: 'ops@agency.example', source: 'HTML mailto' }] }),
+    makeScan('c.com', { exposedIdentifiers: [{ kind: 'email', value: 'other@elsewhere.example', source: 'HTML mailto' }] }),
+  ];
+  const { findings } = computeCorrelation(results);
+  const f = findings.find((x) => x.type === 'shared-contact-email');
+  assert.ok(f, 'expected shared-contact-email');
+  assert.equal(f!.severity, 'high');
+  assert.deepEqual(f!.domains.sort(), ['a.com', 'b.com']);
+});
+
+test('exposed email already covered by shared-report-mailbox is not double-reported', () => {
+  const results = [
+    makeScan('a.com', {
+      dns: makeDns([], { dmarc: dmarc(['dmarc-reports@ops.example']) }),
+      exposedIdentifiers: [{ kind: 'email', value: 'dmarc-reports@ops.example', source: 'DNS DMARC rua' }],
+    }),
+    makeScan('b.com', {
+      dns: makeDns([], { dmarc: dmarc(['dmarc-reports@ops.example']) }),
+      exposedIdentifiers: [{ kind: 'email', value: 'dmarc-reports@ops.example', source: 'DNS DMARC rua' }],
+    }),
+  ];
+  const { findings } = computeCorrelation(results);
+  assert.ok(!findings.some((x) => x.type === 'shared-contact-email'), 'DMARC-sourced address should only appear as shared-report-mailbox');
+  assert.ok(findings.some((x) => x.type === 'shared-report-mailbox'));
 });
 
 test('DMARC reports delivered to a mailbox on another fleet domain → critical explicit link', () => {

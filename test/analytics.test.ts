@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scanAnalytics, mergeAnalytics } from '../src/scanners/analytics.js';
+import { scanAnalytics, mergeAnalytics, analyticsVendors } from '../src/scanners/analytics.js';
+import type { AnalyticsResult } from '../src/types.js';
+
+const emptyAnalytics: AnalyticsResult = { ga4: [], gtm: [], adsense: [], umami: [], facebook: [], clarity: [], plausible: [], cloudflare: [], other: [] };
 
 test('GA4 G-XXXXXXXX detected from gtag config', () => {
   const html = `<script>gtag('config', 'G-ABC123DEFG');</script>`;
@@ -263,4 +266,19 @@ test('mergeAnalytics folds subpage IDs into the homepage result without duplicat
   mergeAnalytics(home, checkout);
   assert.deepEqual(home.ga4, ['G-HOMEHOME1']);
   assert.deepEqual(home.other.map((o) => o.name), ['DNS:Stripe', 'Stripe Publishable Key']);
+});
+
+test('analyticsVendors: first-class families detected', () => {
+  const r = analyticsVendors({ ...emptyAnalytics, ga4: ['G-1'], cloudflare: ['tok'] });
+  assert.deepEqual(r, ['GA4', 'Cloudflare Web Analytics']);
+});
+
+test('analyticsVendors: non-analytics other[] entries (Stripe) are excluded', () => {
+  const r = analyticsVendors({ ...emptyAnalytics, other: [{ name: 'Stripe', id: 'pk_live_x' }] });
+  assert.deepEqual(r, []);
+});
+
+test('analyticsVendors: recognized other[] vendor (Hotjar) is included', () => {
+  const r = analyticsVendors({ ...emptyAnalytics, other: [{ name: 'Hotjar', id: '123' }] });
+  assert.deepEqual(r, ['Hotjar']);
 });

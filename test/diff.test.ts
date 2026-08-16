@@ -141,3 +141,16 @@ test('security/SEO score drift and per-page audit regressions are reported; vola
   assert.ok(!details.some((d) => /timestamp|duration|security score/.test(d)), 'unchanged/volatile fields must not appear');
   assert.equal(r.summary.changed, r.changes.length);
 });
+
+test('volatile-only drift diffs clean and footer counts', () => {
+  const r = buildDiff(
+    input([scan('a.com', { duration: 1, timestamp: '2026-01-01T00:00:00Z' })]),
+    input([scan('a.com', { duration: 999, timestamp: '2027-01-01T00:00:00Z' })]),
+    'a',
+    'b',
+  );
+  assert.equal(r.changes.length, 0);
+  assert.ok(r.compared);
+  assert.ok(r.compared!.fields > 0);
+  assert.ok(r.compared!.ignored.includes('duration'));
+});

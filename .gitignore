@@ -9,3 +9,6 @@ CLAUDE.local.md
 
 # dogfooding notes from other (private) projects — local only
 FEEDBACK.md
+
+# snuff run cache
+.snuff/

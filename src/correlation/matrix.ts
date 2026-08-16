@@ -855,6 +855,24 @@ export function computeCorrelation(
         `Shared CAA accounturi ${uri} across ${unique.length} sites`,
         `Same ACME/CA account issues certificates for all: ${unique.join(', ')}`));
     }
+
+    // Any exposed contact email (security.txt, mailto:/body text) shared across
+    // sites — same signal as shared-report-mailbox but from a broader source set.
+    // Addresses already covered there (DMARC/CAA) aren't restated here.
+    const contactEmailMap: Record<string, string[]> = {};
+    for (const r of results) {
+      for (const id of r.exposedIdentifiers ?? []) {
+        if (id.kind !== 'email') continue;
+        (contactEmailMap[id.value] ??= []).push(r.domain);
+      }
+    }
+    for (const [addr, domains] of Object.entries(contactEmailMap)) {
+      const unique = [...new Set(domains)];
+      if (unique.length < 2 || reportAddrMap[addr]) continue;
+      findings.push(finding('shared-contact-email', 'high', unique,
+        `${unique.length} sites expose contact email ${addr}`,
+        `Same contact email = same operator/admin: ${unique.join(', ')}`));
+    }
   }
 
   // ── Shared DNS verification tokens (proves same owner) ──

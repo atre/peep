@@ -70,9 +70,9 @@ test('emailAuthChecks: null when dns scanner did not run or is a pre-0.2 JSON', 
   assert.equal(emailAuthChecks(legacy), null, 'old JSON without the fields must not read as "missing"');
 });
 
-test('emailAuthChecks: no SPF + no DMARC → both missing', () => {
+test('emailAuthChecks: no SPF + no DMARC → both missing, DKIM warning (none probed)', () => {
   const checks = emailAuthChecks(dns())!;
-  assert.deepEqual(checks.map((c) => [c.name, c.rating]), [['SPF', 'missing'], ['DMARC', 'missing']]);
+  assert.deepEqual(checks.map((c) => [c.name, c.rating]), [['SPF', 'missing'], ['DMARC', 'missing'], ['DKIM', 'warning']]);
 });
 
 test('emailAuthChecks: -all + p=reject → both good', () => {
@@ -80,9 +80,31 @@ test('emailAuthChecks: -all + p=reject → both good', () => {
     spf: parseSpf('v=spf1 include:_spf.google.com -all'),
     dmarc: parseDmarc('v=DMARC1; p=reject; rua=mailto:d@example.com'),
   }))!;
-  assert.deepEqual(checks.map((c) => c.rating), ['good', 'good']);
+  assert.deepEqual(checks.map((c) => c.rating), ['good', 'good', 'warning']);
   assert.match(checks[0].value, /-all · include: _spf\.google\.com/);
   assert.match(checks[1].value, /p=reject rua=d@example\.com/);
+});
+
+// ── DKIM (informational) ──
+
+test('emailAuthChecks: DKIM found at a probed selector → good, DMARC p=none hints "safe to move to p=quarantine"', () => {
+  const checks = emailAuthChecks(dns({
+    spf: parseSpf('v=spf1 -all'),
+    dmarc: parseDmarc('v=DMARC1; p=none'),
+    dkim: [{ selector: 'google', raw: 'v=DKIM1; p=abc' }],
+  }))!;
+  const dkim = checks.find((c) => c.name === 'DKIM')!;
+  assert.equal(dkim.rating, 'good');
+  assert.equal(dkim.value, 'google');
+  const dmarc = checks.find((c) => c.name === 'DMARC')!;
+  assert.match(dmarc.detail, /safe to move to p=quarantine/);
+});
+
+test('DKIM does not fail evaluateCheck --require-email-auth (informational only)', () => {
+  const r = evaluateCheck('example.com', scan({
+    dns: dns({ spf: parseSpf('v=spf1 -all'), dmarc: parseDmarc('v=DMARC1; p=reject') }),
+  }), {}, { clusterOverride: null, securityThreshold: 50, requireSecurityTxt: false, expectNoindex: false, requireEmailAuth: true });
+  assert.ok(!r.failures.some((f) => f.startsWith('DKIM')), 'DKIM must not fail --require-email-auth — it is informational only');
 });
 
 test('emailAuthChecks: +all is bad, ?all is warning, p=none is warning, pct<100 is warning', () => {

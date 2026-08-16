@@ -115,6 +115,30 @@ export function scanAnalytics(html: string, dnsResult?: DnsResult | null): Analy
   return result;
 }
 
+/** `other[].name` values that count as an analytics/tracking vendor for the
+ *  "N analytics vendors" note — payments (Stripe), chat widgets, and captcha
+ *  keys in `other` aren't tracking and are deliberately excluded. */
+const OTHER_ANALYTICS_VENDORS = new Set(['Matomo', 'Hotjar', 'Segment', 'Mixpanel', 'Amplitude', 'PostHog', 'Yandex Metrika']);
+
+/** Distinct analytics/tracking vendors detected, for the informational
+ *  "N analytics vendors (…)" note. Fleet-wide shared IDs remain the primary
+ *  cross-site signal — this is just a per-scan headline. */
+export function analyticsVendors(a: AnalyticsResult): string[] {
+  const vendors: string[] = [];
+  if (a.ga4.length) vendors.push('GA4');
+  if (a.gtm.length) vendors.push('GTM');
+  if (a.adsense.length) vendors.push('AdSense');
+  if (a.umami.length) vendors.push('Umami');
+  if (a.cloudflare.length) vendors.push('Cloudflare Web Analytics');
+  if (a.facebook.length) vendors.push('Facebook Pixel');
+  if (a.clarity.length) vendors.push('Clarity');
+  if (a.plausible.length) vendors.push('Plausible');
+  for (const o of a.other) {
+    if (OTHER_ANALYTICS_VENDORS.has(o.name) && !vendors.includes(o.name)) vendors.push(o.name);
+  }
+  return vendors;
+}
+
 /**
  * Merge tracking IDs found on subpages (sitemap crawl / --pages routes) into the
  * homepage result. Checkout, contact and booking pages are where Stripe keys,

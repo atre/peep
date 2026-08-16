@@ -9,6 +9,18 @@ export interface HttpScanOutput {
   body: string | null;
 }
 
+/** Request headers for a scan fetch. Accept-Language is included only when the
+ *  caller explicitly set one (`--lang`) — sending none is the default and
+ *  matches Googlebot, so a locale-default site isn't skewed toward EN. */
+export function buildRequestHeaders(config: ScanningConfig): Record<string, string> {
+  const headers: Record<string, string> = {
+    'User-Agent': config.userAgent,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  };
+  if (config.acceptLanguage) headers['Accept-Language'] = config.acceptLanguage;
+  return headers;
+}
+
 export async function scanHttp(domain: string, config: ScanningConfig): Promise<HttpScanOutput> {
   const url = origin(domain, config.scheme);
   const start = Date.now();
@@ -22,11 +34,7 @@ export async function scanHttp(domain: string, config: ScanningConfig): Promise<
   for (let hop = 0; hop < 10; hop++) {
     try {
       const res = await fetch(currentUrl, {
-        headers: {
-          'User-Agent': config.userAgent,
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
+        headers: buildRequestHeaders(config),
         redirect: 'manual',
         signal: AbortSignal.timeout(config.timeout),
       });
@@ -56,7 +64,7 @@ export async function scanHttp(domain: string, config: ScanningConfig): Promise<
         try {
           const httpUrl = `http://${domain}`;
           const res = await fetch(httpUrl, {
-            headers: { 'User-Agent': config.userAgent },
+            headers: buildRequestHeaders(config),
             redirect: 'manual',
             signal: AbortSignal.timeout(config.timeout),
           });
@@ -127,6 +135,7 @@ export async function scanHttp(domain: string, config: ScanningConfig): Promise<
       setCookies,
       xRobotsTag: headers['x-robots-tag'] ?? null,
       finalUrl: response.url || null,
+      acceptLanguage: config.acceptLanguage ?? null,
     },
     body,
   };

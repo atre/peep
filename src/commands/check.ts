@@ -1,6 +1,7 @@
 import { scanDomain, validateScannerNames, expandScanners, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
 import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus, parsePagesFlag, emailAuthChecks } from '../utils.js';
+import { seoHeadline } from './scan.js';
 
 const DEFAULT_SECURITY_THRESHOLD = 50;
 
@@ -25,6 +26,11 @@ export interface CheckGateOptions {
    *  (order confirmations, password resets) is spoofable and lands in spam
    *  without them. */
   requireEmailAuth?: boolean;
+  /** --expect-hreflang /blog/*:none — routes matching a glob (prefix match on
+   *  a trailing `*`) are expected to have no hreflang (deliberately
+   *  untranslated); their "Hreflang" check is dropped from `failing` before
+   *  --require-seo / --min-seo evaluation instead of flagging it every run. */
+  expectHreflang?: Array<{ glob: string; value: 'none' }>;
 }
 
 export interface CheckGateResult {
@@ -121,12 +127,16 @@ export function evaluateCheck(
       for (const p of scanResult.pageAudits ?? []) {
         if (p.ok) targets.push({ label: p.route, score: p.seoScore, failing: p.seoIssues ?? [] });
       }
+      const expectHreflang = opts.expectHreflang ?? [];
+      const hreflangExpectedNone = (route: string) => expectHreflang.some((e) =>
+        e.value === 'none' && (e.glob.endsWith('*') ? route.startsWith(e.glob.slice(0, -1)) : route === e.glob));
       for (const t of targets) {
+        const failing = hreflangExpectedNone(t.label) ? t.failing.filter((f) => f.name !== 'Hreflang') : t.failing;
         if (minSeo !== null && t.score !== null && t.score < minSeo) {
-          const why = t.failing.map((f) => f.name).join(', ');
+          const why = failing.map((f) => f.name).join(', ');
           failures.push(`SEO score ${t.score}/100 on ${t.label} is below --min-seo ${minSeo}${why ? ` — failing: ${why}` : ''}`);
         }
-        for (const f of t.failing) {
+        for (const f of failing) {
           if (required.includes(f.name.toLowerCase())) {
             failures.push(`SEO check "${f.name}" not passing on ${t.label} — ${f.detail}`);
           }
@@ -158,6 +168,7 @@ export function evaluateCheck(
         notes.push('email auth not evaluated (dns scanner produced no result)');
       } else {
         for (const ch of checks) {
+          if (ch.name === 'DKIM') continue; // informational only — probed selectors aren't exhaustive
           if (ch.rating !== 'good') failures.push(`${ch.name} ${ch.rating === 'missing' ? 'missing' : 'weak'} — ${ch.detail}`);
         }
       }
@@ -175,6 +186,19 @@ export function evaluateCheck(
   return { clusterName, failures, notes };
 }
 
+/**
+ * Whether a noindex should PASS as a declared pre-launch state — true for
+ * --expect noindex, --prelaunch, --allow-noindex, or --stage pre-launch.
+ * --stage only accepts "pre-launch"; any other value is a fatal error rather
+ * than a silent no-op (so a typo doesn't quietly disable the gate).
+ */
+export function resolveExpectNoindex(flags: Record<string, string | boolean>): boolean {
+  if (flags.stage !== undefined && flags.stage !== 'pre-launch') {
+    throw new Error(`unknown --stage value: ${String(flags.stage)} (only "pre-launch" is supported)`);
+  }
+  return flags.prelaunch === true || flags['allow-noindex'] === true || flags.stage === 'pre-launch' || String(flags.expect ?? '').toLowerCase() === 'noindex';
+}
+
 export async function cmdCheck(
   domain: string,
   config: PeepConfig,
@@ -189,7 +213,7 @@ export async function cmdCheck(
   // (site public for a payment-provider review but kept noindex until go-live).
   // Deliberately NOT readable from .peeprc — a config default could mask a
   // forgotten noindex after the site actually launches.
-  const expectNoindex = flags.prelaunch === true || flags['allow-noindex'] === true || String(flags.expect ?? '').toLowerCase() === 'noindex';
+  const expectNoindex = resolveExpectNoindex(flags);
   // --only narrows the gate's scan the same way it narrows `scan`. WHOIS is
   // skipped by default (slow), but an explicit `--only whois` asks for it.
   const only = flags.only ? String(flags.only).split(',') : undefined;
@@ -205,8 +229,15 @@ export async function cmdCheck(
   const minSeoScore = Number.isFinite(rawSeo) ? rawSeo : null;
   const requiredSeoChecks = typeof flags['require-seo'] === 'string' ? String(flags['require-seo']).split(',') : [];
   const requireEmailAuth = flags['require-email-auth'] === true;
+  const expectHreflang = typeof flags['expect-hreflang'] === 'string'
+    ? String(flags['expect-hreflang']).split(',').map((entry) => {
+        const [glob, value] = entry.split(':');
+        return { glob: (glob ?? '').trim(), value: (value ?? '').trim() as 'none' };
+      }).filter((e) => e.glob && e.value === 'none')
+    : [];
 
-  if (format === 'text') {
+  const brief = flags.brief === true; // implies -q: no "Checking... done" progress line
+  if (format === 'text' && !brief) {
     process.stdout.write(`Checking ${c('cyan', domain)}...`);
   }
 
@@ -219,7 +250,7 @@ export async function cmdCheck(
     pageRoutes,
   });
 
-  if (format === 'text') {
+  if (format === 'text' && !brief) {
     console.log(' done');
   }
 
@@ -232,6 +263,7 @@ export async function cmdCheck(
     minSeoScore,
     requiredSeoChecks,
     requireEmailAuth,
+    expectHreflang,
   });
   const secScore = scanResult.security?.score ?? 0;
 
@@ -260,6 +292,10 @@ export async function cmdCheck(
     }
   }
 
+  if (brief) {
+    process.exit(result.passed ? 0 : 1);
+  }
+
   // Show key metrics
   console.log('');
   const adultStatus = scanResult.content
@@ -275,7 +311,11 @@ export async function cmdCheck(
     ? `${c(scoreColor(secScore, securityThreshold), String(secScore))}/100`
     : c('dim', 'n/a');
   const seoStatus = scanResult.seo?.score != null
-    ? `  |  SEO: ${c(scoreColor(scanResult.seo.score, minSeoScore ?? 50), String(scanResult.seo.score))}/100`
+    ? (() => {
+        const headline = seoHeadline(scanResult.seo);
+        const color = headline.includes('(partial)') ? 'yellow' : scoreColor(scanResult.seo!.score!, minSeoScore ?? 50);
+        return `  |  ${c(color, headline)}`;
+      })()
     : '';
   console.log(`  Content: ${adultStatus}  |  Index: ${indexStatus}  |  Security: ${secStatus}${seoStatus}`);
   if (scanResult.pageAudits?.length) {

@@ -26,13 +26,15 @@ const RDAP_ONLY_TLDS = new Set([
 
 export async function scanWhois(domain: string): Promise<WhoisResult> {
   const tld = domain.split('.').pop()?.toLowerCase() ?? '';
+  const reasons: string[] = [];
 
   // Try traditional WHOIS first
   let raw: string;
   try {
     raw = await queryWhois(domain);
-  } catch {
+  } catch (e) {
     raw = '';
+    reasons.push(whoisFailureReason(e));
   }
 
   let parsed = parseWhois(raw);
@@ -49,10 +51,11 @@ export async function scanWhois(domain: string): Promise<WhoisResult> {
         const followParsed = parseWhois(followUp);
         if (followParsed.registrar || followParsed.createdDate) {
           raw = followUp;
-          return { ...followParsed, raw };
+          return withExpiresIn({ ...followParsed, raw });
         }
-      } catch {
-        // Fallback query failed
+        reasons.push(`refer follow-up to ${server} returned no registrar/created date`);
+      } catch (e) {
+        reasons.push(`refer follow-up to ${server} failed: ${(e as Error).message}`);
       }
     }
 
@@ -61,15 +64,36 @@ export async function scanWhois(domain: string): Promise<WhoisResult> {
       try {
         const rdapResult = await queryRdap(RDAP_BOOTSTRAP, domain);
         if (rdapResult.registrar || rdapResult.createdDate) {
-          return { ...rdapResult, raw: rdapResult.raw || raw };
+          return withExpiresIn({ ...rdapResult, raw: rdapResult.raw || raw });
         }
-      } catch {
-        // RDAP query failed
+        reasons.push('RDAP returned no registrar/created date');
+      } catch (e) {
+        reasons.push((e as Error).message);
       }
     }
   }
 
-  return { ...parsed, raw };
+  if (!parsed.registrar && !parsed.createdDate) {
+    throw new Error(`unavailable: ${reasons.length ? reasons.join('; ') : 'no registrar/created date found'}`);
+  }
+
+  return withExpiresIn({ ...parsed, raw });
+}
+
+/** Attach `expiresIn` (days until `expiryDate`, negative = expired) — computed
+ *  once here rather than left to every consumer to parse the date string.
+ *  Exported for tests; scanWhois itself does real I/O and isn't unit-testable. */
+export function withExpiresIn(result: WhoisResult): WhoisResult {
+  if (!result.expiryDate) return { ...result, expiresIn: null };
+  const t = Date.parse(result.expiryDate);
+  return { ...result, expiresIn: Number.isNaN(t) ? null : Math.floor((t - Date.now()) / 86_400_000) };
+}
+
+function whoisFailureReason(e: unknown): string {
+  const err = e as NodeJS.ErrnoException;
+  if (err?.code === 'ENOENT') return 'whois binary not found';
+  if (err?.name === 'AbortError' || /timed?\s*out/i.test(err?.message ?? '')) return 'whois query timed out';
+  return `whois query failed: ${err?.message ?? 'unknown error'}`;
 }
 
 // Strict domain validation — prevents flag injection and malformed input

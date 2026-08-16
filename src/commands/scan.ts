@@ -1,5 +1,6 @@
 import { scanDomain, validateScannerNames, SELECTABLE_SCANNERS } from '../scanners/index.js';
-import type { PeepConfig, ScanResult, OutputFormat, RobotsTxtSummary, SecurityTxtSummary } from '../types.js';
+import { analyticsVendors } from '../scanners/analytics.js';
+import type { PeepConfig, ScanResult, OutputFormat, RobotsTxtSummary, SecurityTxtSummary, SeoResult, PageAudit } from '../types.js';
 import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster, describeHttpStatus, isErrorStatus, emailAuthChecks } from '../utils.js';
 
 export async function cmdScan(
@@ -20,7 +21,8 @@ export async function cmdScan(
   const scanConfig = resolveScanningConfig(flags, config.scanning);
   const { pages, pageRoutes } = parsePagesFlag(flags);
   const verbose = flags.verbose === true;
-  const quiet = flags.quiet === true;
+  const brief = flags.brief === true;
+  const quiet = flags.quiet === true || brief; // --brief implies -q: no "Scanning... done" progress line
   const outFile = flags.out ? String(flags.out) : null;
 
   const results: ScanResult[] = [];
@@ -48,7 +50,9 @@ export async function cmdScan(
       const noindexStr = result.isNoindex ? ` ${c('yellow', '[NOINDEX]')}` : '';
       const downStr = isErrorStatus(result.http?.statusCode) ? ` ${c('red', `[HTTP ${result.http!.statusCode}]`)}` : '';
       console.log(` done in ${formatDuration(result.duration)}${errStr}${noindexStr}${downStr}`);
-      printScanResult(result, config, verbose);
+      printScanResult(result, config, verbose, only, skipWhois);
+    } else if (format === 'text' && brief) {
+      printScanResult(result, config, verbose, only, skipWhois, true);
     }
   }
 
@@ -75,7 +79,81 @@ export async function cmdScan(
   if (hasAdultOnClean) process.exit(2);
 }
 
-function printScanResult(result: ScanResult, config: PeepConfig, verbose = false): void {
+/** Per-page SEO label: appends "(N/total pass)" so a "92/100" with one `~` line
+ *  is self-explanatory. Falls back to the bare score for older JSON without
+ *  `seoEvaluated`. */
+export function pageSeoLabel(p: PageAudit): string {
+  if (p.seoScore === null) return 'SEO n/a';
+  if (p.seoEvaluated === undefined) return `SEO ${p.seoScore}/100`;
+  const passing = p.seoEvaluated - p.seoIssues.length;
+  return `SEO ${p.seoScore}/100 (${passing}/${p.seoEvaluated} pass)`;
+}
+
+/** SEO headline: the plain score when a full scan ran, or an "N/total evaluated
+ *  (partial)" label when a `--only` selection (or a failed dependency) left some
+ *  checks unevaluated — a bare "100/100" there would misread as a full pass.
+ *  Checks skipped deliberately (noindex) don't count toward "partial". */
+export function seoHeadline(seo: SeoResult | null): string {
+  if (!seo) return 'SEO: not scanned';
+  if (seo.score === null) return 'SEO not evaluated (fetch failed)';
+  const skippedCount = seo.skipped?.length ?? 0;
+  if (seo.evaluated + skippedCount < seo.total) {
+    return `SEO ${seo.evaluated}/${seo.total} evaluated (partial)`;
+  }
+  return `SEO ${seo.score}/100`;
+}
+
+/** WHOIS section replacement when the scanner was selected/enabled but produced
+ *  no usable data — `--only whois` on a scan that failed used to print nothing. */
+export function whoisStatusLine(result: ScanResult, only?: string[]): string | null {
+  if (only && !only.includes('whois')) return null;
+  if (result.whois && (result.whois.registrar || result.whois.createdDate || result.whois.expiryDate)) return null;
+  const reason = result.errors.find((e) => e.scanner === 'whois')?.error ?? 'no data found';
+  return `WHOIS: unavailable (${reason})`;
+}
+
+/** Red-only summary for gate/hook use: at most 10 lines — header (domain +
+ *  SEO/SEC scores + NOINDEX/HTTP-error flags), then only missing/bad checks
+ *  and scan errors. Warnings and good/`+` lines are deliberately dropped. */
+export function briefLines(r: ScanResult): string[] {
+  const flags: string[] = [];
+  if (r.isNoindex) flags.push('[NOINDEX]');
+  if (isErrorStatus(r.http?.statusCode)) flags.push(`[HTTP ${r.http!.statusCode}]`);
+  const headerParts = [r.domain];
+  if (r.seo?.score != null) headerParts.push(`SEO ${r.seo.score}`);
+  if (r.security?.score != null) headerParts.push(`SEC ${r.security.score}`);
+  const header = [headerParts.join('  '), ...flags].join('  ');
+
+  const isRed = (rating: string) => rating === 'missing' || rating === 'bad';
+  const details: string[] = [];
+  for (const check of r.seo?.checks ?? []) {
+    if (isRed(check.rating)) details.push(`  - ${check.name}: ${check.detail}`);
+  }
+  for (const h of r.security?.headers ?? []) {
+    if (isRed(h.rating)) details.push(`  - ${h.name}: ${h.detail}`);
+  }
+  for (const ch of emailAuthChecks(r.dns) ?? []) {
+    if (isRed(ch.rating)) details.push(`  - ${ch.name}: ${ch.detail}`);
+  }
+  for (const e of r.errors) {
+    details.push(`  ! [${e.scanner}] ${e.error}`);
+  }
+
+  const bodyBudget = 9; // 10 total minus the header line
+  if (details.length > bodyBudget) {
+    const shown = details.slice(0, bodyBudget - 1);
+    shown.push(`  … +${details.length - (bodyBudget - 1)} more`);
+    return [header, ...shown];
+  }
+  return [header, ...details];
+}
+
+function printScanResult(result: ScanResult, config: PeepConfig, verbose = false, only?: string[], skipWhois = false, brief = false): void {
+  if (brief) {
+    for (const line of briefLines(result)) console.log(line);
+    return;
+  }
+
   console.log('');
 
   // Error response (prominent) — everything below reflects the error page,
@@ -121,6 +199,7 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     if (result.http.redirectChain.length > 0) {
       console.log(`    Redirects: ${result.http.redirectChain.join(' → ')}`);
     }
+    console.log(`    Accept-Language: ${result.http.acceptLanguage ?? c('dim', '(none sent)')}`);
     if (result.http.setCookies.length > 0) {
       console.log(`    Cookies: ${result.http.setCookies.length} set-cookie header(s)`);
       for (const cookie of result.http.setCookies) {
@@ -169,10 +248,9 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
         console.log(`    DNSSEC: ${result.whois.dnssec}`);
       }
     }
-    // Warn if no data was extracted (TLD-only response)
-    if (!result.whois.registrar && !result.whois.createdDate && !result.whois.expiryDate) {
-      console.log(`    ${c('yellow', '(no registrar data — may be TLD-only response)')}`);
-    }
+  } else if (!skipWhois) {
+    const line = whoisStatusLine(result, only);
+    if (line) console.log(`  ${c('yellow', line)}`);
   }
 
   // HTML metadata
@@ -223,6 +301,8 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     const hasAny = a.ga4.length || a.gtm.length || a.adsense.length || a.umami.length || a.cloudflare.length || a.facebook.length || a.clarity.length || a.plausible.length || a.other.length;
     if (hasAny) {
       console.log(c('bold', '  Analytics / Tracking'));
+      const vendors = analyticsVendors(a);
+      if (vendors.length >= 2) console.log(`    ${c('cyan', `${vendors.length} analytics vendors (${vendors.join(', ')})`)}`);
       if (a.ga4.length) console.log(`    GA4: ${a.ga4.join(', ')}`);
       if (a.gtm.length) console.log(`    GTM: ${a.gtm.join(', ')}`);
       if (a.adsense.length) console.log(`    AdSense: ${a.adsense.join(', ')}`);
@@ -264,9 +344,14 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     console.log(c('bold', '  Robots & Well-Known'));
     console.log(`    robots.txt: ${result.robots.robotsTxt ? c('green', 'present') : c('dim', 'absent')}${result.robots.robotsTxtHash ? ` (hash: ${result.robots.robotsTxtHash})` : ''}${formatRobotsSummary(result.robots.robotsSummary)}`);
     if (result.robots.sitemapUrls.length) console.log(`    Sitemap: ${result.robots.sitemapUrls.join(', ')}`);
-    console.log(`    ads.txt: ${result.robots.adsTxt ? c('green', 'present') : c('dim', 'absent')}`);
+    const adsFacts = result.robots.adsTxt && result.robots.adsTxtPubIds.length
+      ? ` — ${result.robots.adsTxtPubIds.length} pub-id(s): ${result.robots.adsTxtPubIds.slice(0, 3).join(', ')}`
+      : '';
+    console.log(`    ads.txt: ${result.robots.adsTxt ? c('green', 'present') : c('dim', 'absent')}${adsFacts}`);
     console.log(`    security.txt: ${result.robots.securityTxt ? c('green', 'present') : c('yellow', 'absent')}${formatSecurityTxtSummary(result.robots.securityTxtSummary)}`);
-    console.log(`    humans.txt: ${result.robots.humansTxt ? c('green', 'present') : c('dim', 'absent')}`);
+    const h = result.robots.humansTxtSummary;
+    const humansFacts = h ? ` — ${h.lines} lines${h.contact ? `, Contact: ${h.contact}` : ''}` : '';
+    console.log(`    humans.txt: ${result.robots.humansTxt ? c('green', 'present') : c('dim', 'absent')}${humansFacts}`);
   }
 
   // Security headers
@@ -282,19 +367,20 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     if (result.security.formProviders.length) {
       console.log(`    ${c('cyan', '◆')} Form/booking providers (CSP): ${result.security.formProviders.join(', ')}`);
     }
+    if (result.exposedIdentifiers?.length) {
+      const list = result.exposedIdentifiers.map((i) => `${i.value} (${i.source})`).join(', ');
+      console.log(`    ${c('yellow', '◆')} Exposed identifiers: email ${list}`);
+    }
   }
 
   // SEO
   if (result.seo) {
-    const scoreLabel = result.seo.score === null
-      ? c('dim', 'not evaluated (fetch failed)')
-      : c(scoreColor(result.seo.score), `(${result.seo.score}/100)`);
-    // A robots-only --only run evaluates 2 of 12 checks; a bare "100/100" there
-    // would get quoted as a full SEO pass. Say how much was actually covered.
-    const partial = result.seo.evaluated < result.seo.total
-      ? ` ${c('yellow', `partial — ${result.seo.evaluated}/${result.seo.total} checks evaluated`)}`
+    const headline = seoHeadline(result.seo);
+    const color = result.seo.score === null ? 'dim' : headline.includes('(partial)') ? 'yellow' : scoreColor(result.seo.score);
+    const noindexNote = result.seo.skipped?.length
+      ? ` ${c('dim', '— noindex: canonical/hreflang/JSON-LD not scored')}`
       : '';
-    console.log(c('bold', '  SEO') + ` ${scoreLabel}${partial}`);
+    console.log(`  ${c(color, headline)}${noindexNote}`);
     for (const check of result.seo.checks) {
       const icon = check.rating === 'good' ? c('green', '+') : check.rating === 'warning' ? c('yellow', '~') : check.rating === 'missing' ? c('dim', '-') : c('red', '!');
       console.log(`    ${icon} ${check.name}: ${check.detail}`);
@@ -353,7 +439,7 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
         console.log(`    ${c('yellow', p.route)} — ${c('red', p.statusCode ? `HTTP ${p.statusCode}` : 'unreachable')}`);
         continue;
       }
-      const seoStr = p.seoScore !== null ? c(scoreColor(p.seoScore), `SEO ${p.seoScore}/100`) : 'SEO n/a';
+      const seoStr = p.seoScore !== null ? c(scoreColor(p.seoScore), pageSeoLabel(p)) : 'SEO n/a';
       const noindexStr = p.isNoindex ? ` ${c('yellow', '[NOINDEX]')}` : '';
       console.log(`    ${c('cyan', p.route)} — ${seoStr}${noindexStr}`);
       if (p.title) console.log(`      Title: ${p.title.slice(0, 70)}`);
@@ -362,7 +448,8 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
       if (p.hreflang.length) {
         console.log(`      hreflang (${p.hreflang.length}): ${p.hreflang.map((h) => h.lang).join(', ')}`);
       } else {
-        console.log(`      ${c('yellow', 'hreflang: none')}`);
+        const hreflangCheck = p.seoIssues.find((ch) => ch.name === 'Hreflang');
+        console.log(`      ${c('yellow', hreflangCheck ? `hreflang: ${hreflangCheck.detail}` : 'hreflang: none')}`);
       }
       if (p.formEndpoints.length) {
         console.log(`      Form endpoints: ${p.formEndpoints.map(shortenUrl).join(', ')}`);

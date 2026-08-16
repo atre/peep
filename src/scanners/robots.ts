@@ -1,5 +1,5 @@
 import { origin, shortHash } from '../utils.js';
-import type { RobotsResult, ScanningConfig, RobotsTxtSummary, SecurityTxtSummary } from '../types.js';
+import type { RobotsResult, ScanningConfig, RobotsTxtSummary, SecurityTxtSummary, HumansTxtSummary } from '../types.js';
 import { readCapped } from '../fetch-guard.js';
 
 const AFFILIATE_REDIRECT_PATHS = ['/go/', '/out/', '/redirect/', '/aff/', '/refer/'];
@@ -116,6 +116,7 @@ export async function scanRobots(domain: string, config: ScanningConfig): Promis
   result.securityTxt = security;
   result.humansTxt = humans;
   if (security) result.securityTxtSummary = summarizeSecurityTxt(security);
+  if (humans) result.humansTxtSummary = summarizeHumansTxt(humans);
 
   return result;
 }
@@ -189,6 +190,27 @@ export function summarizeSecurityTxt(text: string): SecurityTxtSummary {
     policy,
     hasSignature: /-----BEGIN PGP SIGNED MESSAGE-----/.test(text),
   };
+}
+
+/** Key facts of a humans.txt: line count plus the first Contact:/team-lead value. */
+export function summarizeHumansTxt(text: string): HumansTxtSummary {
+  const rawLines = text.split(/\r?\n/);
+  const lines = rawLines.filter((l) => l.trim().length > 0).length;
+  let contact: string | null = null;
+  let team: string | null = null;
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (!contact) {
+      const m = /^Contact\s*:\s*(.+)$/i.exec(line);
+      if (m) contact = m[1].trim();
+    }
+    if (!team) {
+      const m = /^(?:Chef|Developer|Team)\s*:\s*(.+)$/i.exec(line);
+      if (m) team = m[1].trim();
+    }
+  }
+  return { lines, contact, team };
 }
 
 function normalizeWhitespace(text: string): string {

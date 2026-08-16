@@ -4,6 +4,10 @@ interface SeoInput {
   html: HtmlResult | null;
   robots: RobotsResult | null;
   hasHreflang?: boolean;
+  /** Hreflang langs found on the site's root page, when scoring a non-root
+   *  page (e.g. via `--pages`) — distinguishes "this page has none" (fine if
+   *  deliberately untranslated) from "site isn't i18n at all". */
+  siteHreflang?: string[];
   statusCode?: number;
   /**
    * Whether the html scanner actually ran. When false, HTML-derived checks are
@@ -16,6 +20,9 @@ interface SeoInput {
   /** Scheme of the final observed response ('http' when the site was actually
    *  served over plain HTTP — via explicit http:// target or https→http fallback). */
   finalScheme?: 'https' | 'http';
+  /** True when the page is noindex (meta robots / X-Robots-Tag). Canonical URL,
+   *  Hreflang, and Structured Data don't apply — they're skipped, not scored. */
+  noindex?: boolean;
 }
 
 export function scanSeo(input: SeoInput): SeoResult {
@@ -26,6 +33,7 @@ export function scanSeo(input: SeoInput): SeoResult {
   const { html, robots } = input;
   const htmlScanned = input.htmlScanned ?? true;
   const robotsScanned = input.robotsScanned ?? true;
+  const noindex = input.noindex ?? false;
 
   // ── HTML-derived checks — only evaluated when the html scanner ran ──
   if (htmlScanned) {
@@ -39,7 +47,11 @@ export function scanSeo(input: SeoInput): SeoResult {
       if (len >= 30 && len <= 60) {
         points += titleWeight;
         checks.push({ name: 'Title', present: true, value: `${len} chars`, rating: 'good', detail: `"${html.title.slice(0, 60)}" (${len} chars — optimal)` });
-      } else if (len < 30) {
+      } else if ((len >= 25 && len < 30) || (len > 60 && len <= 65)) {
+        // Within ±5 of optimal — SERPs render this fine, not worth a warning.
+        points += titleWeight;
+        checks.push({ name: 'Title', present: true, value: `${len} chars`, rating: 'good', detail: `"${html.title.slice(0, 60)}" (${len} chars — borderline, aim for 30-60)` });
+      } else if (len < 25) {
         points += Math.floor(titleWeight / 2);
         checks.push({ name: 'Title', present: true, value: `${len} chars`, rating: 'warning', detail: `"${html.title}" (${len} chars — too short, aim for 30-60)` });
       } else {
@@ -58,7 +70,10 @@ export function scanSeo(input: SeoInput): SeoResult {
       if (len >= 120 && len <= 160) {
         points += descWeight;
         checks.push({ name: 'Meta Description', present: true, value: `${len} chars`, rating: 'good', detail: `${len} chars — optimal length` });
-      } else if (len < 120) {
+      } else if ((len >= 115 && len < 120) || (len > 160 && len <= 165)) {
+        points += descWeight;
+        checks.push({ name: 'Meta Description', present: true, value: `${len} chars`, rating: 'good', detail: `${len} chars — borderline, aim for 120-160` });
+      } else if (len < 115) {
         points += Math.floor(descWeight / 2);
         checks.push({ name: 'Meta Description', present: true, value: `${len} chars`, rating: 'warning', detail: `${len} chars — short, aim for 120-160` });
       } else {
@@ -67,14 +82,16 @@ export function scanSeo(input: SeoInput): SeoResult {
       }
     }
 
-    // ── Canonical URL ──
-    const canonicalWeight = 10;
-    maxPoints += canonicalWeight;
-    if (html?.canonicalUrl) {
-      points += canonicalWeight;
-      checks.push({ name: 'Canonical URL', present: true, value: html.canonicalUrl, rating: 'good', detail: html.canonicalUrl });
-    } else {
-      checks.push({ name: 'Canonical URL', present: false, value: null, rating: 'missing', detail: 'No canonical URL — risk of duplicate content issues' });
+    // ── Canonical URL ── (skipped on noindex pages — doesn't apply)
+    if (!noindex) {
+      const canonicalWeight = 10;
+      maxPoints += canonicalWeight;
+      if (html?.canonicalUrl) {
+        points += canonicalWeight;
+        checks.push({ name: 'Canonical URL', present: true, value: html.canonicalUrl, rating: 'good', detail: html.canonicalUrl });
+      } else {
+        checks.push({ name: 'Canonical URL', present: false, value: null, rating: 'missing', detail: 'No canonical URL — risk of duplicate content issues' });
+      }
     }
 
     // ── Open Graph ──
@@ -136,26 +153,35 @@ export function scanSeo(input: SeoInput): SeoResult {
       checks.push({ name: 'Viewport', present: false, value: null, rating: 'missing', detail: 'No viewport meta — not mobile-friendly (hurts mobile rankings)' });
     }
 
-    // ── JSON-LD Structured Data ──
-    const ldWeight = 10;
-    maxPoints += ldWeight;
-    if (html?.jsonLd?.length) {
-      points += ldWeight;
-      const types = html.jsonLd.map((j) => j.type).filter(Boolean);
-      checks.push({ name: 'Structured Data', present: true, value: `${html.jsonLd.length} item(s)`, rating: 'good', detail: `JSON-LD: ${types.join(', ') || 'present'}` });
-    } else {
-      checks.push({ name: 'Structured Data', present: false, value: null, rating: 'missing', detail: 'No JSON-LD structured data — limits rich snippet eligibility' });
+    // ── JSON-LD Structured Data ── (skipped on noindex pages — doesn't apply)
+    if (!noindex) {
+      const ldWeight = 10;
+      maxPoints += ldWeight;
+      if (html?.jsonLd?.length) {
+        points += ldWeight;
+        const types = html.jsonLd.map((j) => j.type).filter(Boolean);
+        checks.push({ name: 'Structured Data', present: true, value: `${html.jsonLd.length} item(s)`, rating: 'good', detail: `JSON-LD: ${types.join(', ') || 'present'}` });
+      } else {
+        checks.push({ name: 'Structured Data', present: false, value: null, rating: 'missing', detail: 'No JSON-LD structured data — limits rich snippet eligibility' });
+      }
     }
 
-    // ── Hreflang ── (derived from the HTML <head>, so gated with the HTML checks)
-    const hreflangWeight = 5;
-    maxPoints += hreflangWeight;
-    if (input.hasHreflang) {
-      points += hreflangWeight;
-      checks.push({ name: 'Hreflang', present: true, value: 'present', rating: 'good', detail: 'hreflang alternate links configured for i18n' });
-    } else {
-      // Not missing per se — only matters for multilingual sites
-      checks.push({ name: 'Hreflang', present: false, value: null, rating: 'warning', detail: 'No hreflang — add if site has multiple language versions' });
+    // ── Hreflang ── (derived from the HTML <head>, so gated with the HTML checks;
+    // skipped on noindex pages — doesn't apply)
+    if (!noindex) {
+      const hreflangWeight = 5;
+      maxPoints += hreflangWeight;
+      if (input.hasHreflang) {
+        points += hreflangWeight;
+        checks.push({ name: 'Hreflang', present: true, value: 'present', rating: 'good', detail: 'hreflang alternate links configured for i18n' });
+      } else if (input.siteHreflang?.length) {
+        // The site is known i18n (root has hreflang) but this specific page
+        // doesn't — could be a deliberately untranslated page, not a bug.
+        checks.push({ name: 'Hreflang', present: false, value: null, rating: 'warning', detail: `site is i18n (root: ${input.siteHreflang.join(', ')}) — this page has none: fine if untranslated, else add self-ref + x-default` });
+      } else {
+        // Not missing per se — only matters for multilingual sites
+        checks.push({ name: 'Hreflang', present: false, value: null, rating: 'warning', detail: 'No hreflang — add if site has multiple language versions' });
+      }
     }
   }
 
@@ -204,7 +230,8 @@ export function scanSeo(input: SeoInput): SeoResult {
   // HTTP fetch both html and robots depend on failed) — that's "not evaluated",
   // not a perfect (nor a zero) score. Don't fabricate either.
   const score = maxPoints === 0 ? null : Math.round((points / maxPoints) * 100);
-  return { score, checks, evaluated: checks.length, total: SEO_TOTAL_CHECKS };
+  const skipped = noindex && htmlScanned ? ['Canonical URL', 'Hreflang', 'Structured Data'] : undefined;
+  return { score, checks, evaluated: checks.length, total: SEO_TOTAL_CHECKS, ...(skipped ? { skipped } : {}) };
 }
 
 /** Checks a full scan evaluates: 9 HTML-derived + 2 robots-derived + HTTPS. */

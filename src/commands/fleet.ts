@@ -12,7 +12,7 @@ export async function cmdFleet(
   const skipWhois = flags['skip-whois'] === true;
   const skipAssets = flags['skip-assets'] === true;
   const scanConfig = resolveScanningConfig(flags, config.scanning);
-  const quiet = flags.quiet === true;
+  const quiet = flags.quiet === true || flags.brief === true; // --brief implies -q: summary blocks only
   const only = flags.only ? String(flags.only).split(',') : config.scanning.only;
 
   if (domains.length === 0) {

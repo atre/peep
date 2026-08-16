@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { PeepConfig } from './types.js';
 import { normalizeDomain } from './utils.js';
+import type { FleetFile } from './fleet-config.js';
 
 const DEFAULTS: PeepConfig = {
   fleet: {
@@ -23,7 +24,12 @@ const DEFAULTS: PeepConfig = {
   },
 };
 
-export function loadConfig(customPath?: string): PeepConfig {
+/**
+ * @param fleetFile When given and the loaded/default `.peeprc` doesn't
+ *   explicitly set `fleet.domains`, its `domains` become the default fleet —
+ *   an explicit `.peeprc` domains list always wins over `fleet.yaml`.
+ */
+export function loadConfig(customPath?: string, fleetFile?: FleetFile | null): PeepConfig {
   const paths = customPath
     ? [customPath]
     : [
@@ -37,14 +43,21 @@ export function loadConfig(customPath?: string): PeepConfig {
       try {
         const raw = readFileSync(p, 'utf-8');
         const parsed = JSON.parse(raw);
-        return postProcess(merge(DEFAULTS, parsed));
+        const merged = merge(DEFAULTS, parsed);
+        if (fleetFile?.domains.length && !parsed.fleet?.domains?.length) {
+          merged.fleet.domains = fleetFile.domains;
+        }
+        return postProcess(merged);
       } catch (e) {
         console.error(`Warning: failed to parse config at ${p}: ${(e as Error).message}`);
       }
     }
   }
 
-  return postProcess(DEFAULTS);
+  const config = fleetFile?.domains.length
+    ? { ...DEFAULTS, fleet: { ...DEFAULTS.fleet, domains: fleetFile.domains } }
+    : DEFAULTS;
+  return postProcess(config);
 }
 
 // Keys that must never leak into merged config (prototype pollution prevention)

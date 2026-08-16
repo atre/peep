@@ -92,6 +92,28 @@ test('--dns before the domain also parses correctly', () => {
   assert.deepEqual(r.domains, ['example.com']);
 });
 
+test('--lang de → lang flag parses', () => {
+  const r = parseArgs(args('scan', 'example.com', '--lang', 'de'));
+  assert.equal(r.flags.lang, 'de');
+  assert.deepEqual(r.domains, ['example.com']);
+});
+
+test('--expect-hreflang /blog/*:none → value parses', () => {
+  const r = parseArgs(args('check', 'example.com', '--expect-hreflang', '/blog/*:none'));
+  assert.equal(r.flags['expect-hreflang'], '/blog/*:none');
+});
+
+test('--stage pre-launch → value parses', () => {
+  const r = parseArgs(args('check', 'example.com', '--stage', 'pre-launch'));
+  assert.equal(r.flags.stage, 'pre-launch');
+});
+
+test('--brief is boolean, never swallows the following domain', () => {
+  const r = parseArgs(args('scan', '--brief', 'example.com'));
+  assert.equal(r.flags.brief, true);
+  assert.deepEqual(r.domains, ['example.com']);
+});
+
 test('--prelaunch is a boolean flag', () => {
   const r = parseArgs(args('check', 'example.com', '--prelaunch'));
   assert.equal(r.flags.prelaunch, true);

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { DnsResult, ScanningConfig } from './types.js';
+import type { DnsResult, ScanningConfig, ScanResult } from './types.js';
+import { DKIM_SELECTORS } from './scanners/dns.js';
 
 /** Write `content` to `outFile` (resolved against cwd) and return the absolute path.
  *  Shared by every command that supports --out so the flag isn't a per-command no-op. */
@@ -213,7 +214,7 @@ export function isErrorStatus(status: number | null | undefined): status is numb
 // ── Email authentication (SPF / DMARC) ──
 
 export interface EmailAuthCheck {
-  name: 'SPF' | 'DMARC';
+  name: 'SPF' | 'DMARC' | 'DKIM';
   rating: 'good' | 'warning' | 'missing' | 'bad';
   /** One-line human summary, e.g. `-all · include: _spf.google.com`. */
   value: string;
@@ -244,6 +245,7 @@ export function emailAuthChecks(dns: DnsResult | null | undefined): EmailAuthChe
     else out.push({ name: 'SPF', rating: 'good', value, detail: spf.all === '-all' ? 'hard fail for unlisted senders' : 'soft fail for unlisted senders' });
   }
 
+  const dkim = dns.dkim ?? [];
   const dmarc = dns.dmarc;
   if (!dmarc) {
     out.push({ name: 'DMARC', rating: 'missing', value: 'none', detail: 'No _dmarc record — SPF/DKIM failures are not enforced, spoofed mail is still delivered' });
@@ -258,10 +260,62 @@ export function emailAuthChecks(dns: DnsResult | null | undefined): EmailAuthChe
       if (dmarc.pct !== null && dmarc.pct < 100) out.push({ name: 'DMARC', rating: 'warning', value, detail: `p=${dmarc.policy} applies to only ${dmarc.pct}% of mail` });
       else out.push({ name: 'DMARC', rating: 'good', value, detail: `p=${dmarc.policy} — spoofed mail is ${dmarc.policy === 'reject' ? 'rejected' : 'quarantined'}` });
     } else if (dmarc.policy === 'none') {
-      out.push({ name: 'DMARC', rating: 'warning', value, detail: 'p=none — monitoring only, spoofed mail is still delivered' });
+      const dkimHint = dkim.length ? ' — DKIM present, safe to move to p=quarantine' : '';
+      out.push({ name: 'DMARC', rating: 'warning', value, detail: `p=none — monitoring only, spoofed mail is still delivered${dkimHint}` });
     } else {
       out.push({ name: 'DMARC', rating: 'bad', value, detail: `DMARC record present but policy is ${dmarc.policy ? `"${dmarc.policy}"` : 'missing'} — malformed` });
     }
   }
+
+  // DKIM is informational — probed only at common selectors, so absence here
+  // doesn't prove the domain has none (their selector may not be in the list).
+  if (dkim.length) {
+    out.push({ name: 'DKIM', rating: 'good', value: dkim.map((d) => d.selector).join(', '), detail: `DKIM key found at selector(s): ${dkim.map((d) => d.selector).join(', ')}` });
+  } else {
+    out.push({ name: 'DKIM', rating: 'warning', value: 'none', detail: `no DKIM at common selectors (probed: ${DKIM_SELECTORS.join(', ')})` });
+  }
+
+  return out;
+}
+
+export interface ExposedIdentifier {
+  kind: 'email';
+  value: string;
+  source: string;
+}
+
+/**
+ * Every email address a scan surfaced, with where it came from — DMARC
+ * rua/ruf, CAA iodef, security.txt Contact, and mailto:/body-text on the page
+ * itself. Feeds the scan output's "Exposed identifiers" line and, fleet-wide,
+ * shared-contact-email correlation.
+ */
+export function collectExposedIdentifiers(r: ScanResult): ExposedIdentifier[] {
+  const out: ExposedIdentifier[] = [];
+  const seen = new Set<string>();
+  const add = (value: string, source: string) => {
+    const v = value.toLowerCase();
+    const key = `${v}|${source}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ kind: 'email', value: v, source });
+  };
+
+  const dmarc = r.dns?.dmarc;
+  for (const addr of dmarc?.rua ?? []) add(addr, 'DNS DMARC rua');
+  for (const addr of dmarc?.ruf ?? []) add(addr, 'DNS DMARC ruf');
+
+  for (const caa of r.dns?.caa ?? []) {
+    const m = caa.match(/^iodef\s+(?:mailto:)?(\S+@\S+)$/i);
+    if (m?.[1]) add(m[1], 'DNS CAA iodef');
+  }
+
+  for (const contact of r.robots?.securityTxtSummary?.contacts ?? []) {
+    const email = contact.replace(/^mailto:/i, '');
+    if (/^\S+@\S+$/.test(email)) add(email, 'security.txt Contact');
+  }
+
+  for (const email of r.html?.emails ?? []) add(email, 'HTML mailto');
+
   return out;
 }

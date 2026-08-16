@@ -22,6 +22,7 @@ const BOOLEAN_FLAGS = new Set([
   'verbose',
   'quiet',
   'json',
+  'brief',
 ]);
 
 /** Short flags that never take a value (mirrors BOOLEAN_FLAGS after shortMap expansion). */
@@ -154,6 +155,10 @@ FLAGS
   -v                     Verbose output (show scanner timing, raw data,
                           and hash values in correlation findings)
   -q                     Quiet output (suppress per-domain lines, show summary only)
+  --brief                Red-only output for gate/hook use: at most 10 lines
+                          per domain — missing/bad checks, HTTP errors,
+                          NOINDEX, scan errors. No good/warning lines.
+                          Implies -q. Works on scan/check/fleet.
   --cluster <name>       Cluster context for check command (clean|adult)
   --min-score <n>        Minimum security score for check command (default: 50)
   --require-security-txt Fail check if security.txt is absent
@@ -165,8 +170,13 @@ FLAGS
                           pass on the root page and every --pages route, e.g.
                           "Open Graph,Canonical URL" — blocks a deploy where a
                           page lost its og:image
+  --expect-hreflang <g>  check only: comma-separated glob:none pairs, e.g.
+                          "/blog/*:none" — routes matching the glob (trailing
+                          * = prefix match) are expected to have no hreflang
+                          (deliberately untranslated) and are exempted from
+                          --require-seo Hreflang / --min-seo on that check
   --expect <state>       check only: --expect noindex (aliases: --prelaunch,
-                          --allow-noindex)
+                          --allow-noindex, --stage pre-launch)
                           converts a noindex failure into a PASS annotated
                           "noindex (declared pre-launch)" — for a site that's
                           public for a payment-provider review but
@@ -174,6 +184,9 @@ FLAGS
                           passed explicitly every time — never a .peeprc
                           default — so it can't mask a forgotten noindex
                           after launch.
+  --stage pre-launch     check only: alias for --expect noindex. Only
+                          "pre-launch" is accepted — anything else is a
+                          fatal error, not a silent no-op.
   --dns <server>          Pin DNS resolution to this server (e.g. 1.1.1.1)
                           instead of the OS resolver. Without it, the OS
                           resolver's result still wins — but if it returns
@@ -182,6 +195,17 @@ FLAGS
                           (stale negative-cache signature after a fresh
                           cutover). Applies to every scanner — dns's own
                           queries plus the fetch()/tls.connect() fallback.
+  --lang <xx>             Send Accept-Language: <xx> on every fetch. Default
+                          is to send no Accept-Language at all (matches
+                          Googlebot) — a hardcoded en-US would skew a
+                          locale-default site (e.g. a DE-default store)
+                          toward its EN variant. Applies to --pages too.
+  --fleet <path>          Read domains/pages from a fleet.yaml (default:
+                          ./fleet.yaml if present) — schema shared with
+                          looksy/texter/trusty: domains: [...], pages: [...],
+                          locales: [...], viewports: [...] (peep uses only
+                          domains + pages). An explicit .peeprc domains list
+                          always wins; --pages always wins over fleet.yaml.
 
 EXIT CODES
   0  All clear

@@ -5,6 +5,24 @@ import { c, emailAuthChecks } from '../utils.js';
 
 const CHANGE_TYPES = new Set<DiffEntry['type']>(['analytics_change', 'noindex_change', 'adult_score_change', 'score_change', 'page_change']);
 
+/** Fields buildDiff deliberately never compares — deploy-to-deploy noise
+ *  (timestamps, timing, per-build asset hashes) that would make every diff
+ *  report drift even when nothing semantic changed. */
+export const VOLATILE_FIELDS = [
+  'timestamp',
+  'duration',
+  'http.timing',
+  'tls.daysUntilExpiry',
+  'tls.validTo',
+  'assets.cssHashes',
+  'assets.jsHashes',
+  'html.inlineScriptHashes',
+];
+
+/** Running count of semantic fields actually compared, for the "compared N
+ *  fields, ignored M volatile" footer. */
+interface DiffStats { fields: number }
+
 export interface DiffInput {
   // Could be a single scan, array of scans, or a correlation report
   scans?: ScanResult[];
@@ -16,6 +34,7 @@ export interface DiffInput {
 /** Compare two loaded inputs into a DiffReport. Pure (no I/O) so it can be unit-tested. */
 export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: string): DiffReport {
   const changes: DiffEntry[] = [];
+  const stats: DiffStats = { fields: 0 };
 
   const scansA = a.scans ?? [];
   const scansB = b.scans ?? [];
@@ -45,6 +64,7 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
     const sa = mapA.get(domain)!;
     const sb = mapB.get(domain)!;
 
+    stats.fields++; // isNoindex
     // noindex change
     if (sa.isNoindex !== sb.isNoindex) {
       if (sa.isNoindex && !sb.isNoindex) {
@@ -54,6 +74,7 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
       }
     }
 
+    stats.fields++; // adultScore
     // Adult score change
     const scoreA = sa.content?.adultScore ?? 0;
     const scoreB = sb.content?.adultScore ?? 0;
@@ -66,25 +87,25 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
     }
 
     // Analytics changes (GA4, AdSense, GTM)
-    diffIdSet(changes, domain, 'GA4', sa.analytics?.ga4, sb.analytics?.ga4);
-    diffIdSet(changes, domain, 'AdSense', sa.analytics?.adsense, sb.analytics?.adsense);
-    diffIdSet(changes, domain, 'GTM', sa.analytics?.gtm, sb.analytics?.gtm);
-    diffIdSet(changes, domain, 'Facebook Pixel', sa.analytics?.facebook, sb.analytics?.facebook);
-    diffIdSet(changes, domain, 'Clarity', sa.analytics?.clarity, sb.analytics?.clarity);
+    diffIdSet(stats, changes, domain, 'GA4', sa.analytics?.ga4, sb.analytics?.ga4);
+    diffIdSet(stats, changes, domain, 'AdSense', sa.analytics?.adsense, sb.analytics?.adsense);
+    diffIdSet(stats, changes, domain, 'GTM', sa.analytics?.gtm, sb.analytics?.gtm);
+    diffIdSet(stats, changes, domain, 'Facebook Pixel', sa.analytics?.facebook, sb.analytics?.facebook);
+    diffIdSet(stats, changes, domain, 'Clarity', sa.analytics?.clarity, sb.analytics?.clarity);
     // Third-party account IDs (Stripe key, pixels, chat widgets…) — a new
     // vendor key appearing on a deploy is exactly the drift a baseline should catch.
     // DNS:* entries are DNS TXT tokens, compared separately below.
     const otherIds = (a: typeof sa) => (a.analytics?.other ?? []).filter((o) => !o.name.startsWith('DNS:')).map((o) => `${o.name}: ${o.id}`);
-    diffIdSet(changes, domain, 'third-party', otherIds(sa), otherIds(sb));
+    diffIdSet(stats, changes, domain, 'third-party', otherIds(sa), otherIds(sb));
     // Email posture: an SPF/DMARC record that vanished (or appeared) between snapshots
-    diffEmailAuth(changes, domain, sa.dns, sb.dns);
+    diffEmailAuth(stats, changes, domain, sa.dns, sb.dns);
 
     // Score drift (security headers, SEO) — the deploy-to-deploy regressions a
     // baseline exists to catch. Volatile fields (timestamps, timing, asset
     // hashes of per-build chunks) are deliberately never compared.
-    diffScore(changes, domain, 'security score', sa.security?.score, sb.security?.score);
-    diffScore(changes, domain, 'SEO score', sa.seo?.score, sb.seo?.score);
-    diffFailingChecks(changes, domain, '', sa.seo?.checks, sb.seo?.checks);
+    diffScore(stats, changes, domain, 'security score', sa.security?.score, sb.security?.score);
+    diffScore(stats, changes, domain, 'SEO score', sa.seo?.score, sb.seo?.score);
+    diffFailingChecks(stats, changes, domain, '', sa.seo?.checks, sb.seo?.checks);
 
     // Per-page audits (--pages routes): a page that lost its og:image or
     // flipped to noindex between deploys shows up here.
@@ -93,6 +114,7 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
     for (const [route, pb] of pagesB) {
       const pa = pagesA.get(route);
       if (!pa) continue; // route not in baseline — nothing to compare against
+      stats.fields += 3; // ok, isNoindex, canonicalUrl
       if (pa.ok !== pb.ok) {
         changes.push({ type: 'page_change', domain, detail: `${domain}${route}: ${pa.ok ? 'OK' : 'unreachable'} → ${pb.ok ? 'OK' : `unreachable (HTTP ${pb.statusCode ?? '?'})`}` });
         continue;
@@ -103,8 +125,8 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
       if ((pa.canonicalUrl ?? null) !== (pb.canonicalUrl ?? null)) {
         changes.push({ type: 'page_change', domain, detail: `${domain}${route}: canonical ${pa.canonicalUrl ?? '(none)'} → ${pb.canonicalUrl ?? '(none)'}` });
       }
-      diffScore(changes, domain, `${route} SEO score`, pa.seoScore, pb.seoScore, 'page_change');
-      diffFailingChecks(changes, domain, route, pa.seoIssues, pb.seoIssues, 'page_change');
+      diffScore(stats, changes, domain, `${route} SEO score`, pa.seoScore, pb.seoScore, 'page_change');
+      diffFailingChecks(stats, changes, domain, route, pa.seoIssues, pb.seoIssues, 'page_change');
     }
   }
 
@@ -144,10 +166,11 @@ export function buildDiff(a: DiffInput, b: DiffInput, fileA: string, fileB: stri
     changed: changes.filter((ch) => CHANGE_TYPES.has(ch.type)).length,
   };
 
-  return { fileA, fileB, timestamp: new Date().toISOString(), changes, summary };
+  return { fileA, fileB, timestamp: new Date().toISOString(), changes, summary, compared: { fields: stats.fields, ignored: VOLATILE_FIELDS } };
 }
 
 function diffScore(
+  stats: DiffStats,
   changes: DiffEntry[],
   domain: string,
   label: string,
@@ -155,7 +178,9 @@ function diffScore(
   b: number | null | undefined,
   type: DiffEntry['type'] = 'score_change',
 ): void {
-  if (a == null || b == null || a === b) return;
+  if (a == null || b == null) return;
+  stats.fields++;
+  if (a === b) return;
   changes.push({
     type,
     domain,
@@ -169,6 +194,7 @@ function diffScore(
  * "good" doesn't register — while "Open Graph: good → warning" does.
  */
 function diffFailingChecks(
+  stats: DiffStats,
   changes: DiffEntry[],
   domain: string,
   route: string,
@@ -177,6 +203,7 @@ function diffFailingChecks(
   type: DiffEntry['type'] = 'score_change',
 ): void {
   if (!checksA || !checksB) return;
+  stats.fields += checksB.length;
   const failA = new Map(checksA.filter((ch) => ch.rating !== 'good').map((ch) => [ch.name, ch]));
   const failB = new Map(checksB.filter((ch) => ch.rating !== 'good').map((ch) => [ch.name, ch]));
   const where = `${domain}${route}`;
@@ -189,10 +216,11 @@ function diffFailingChecks(
 }
 
 /** SPF/DMARC drift between two dns results — only when both snapshots carry the fields. */
-function diffEmailAuth(changes: DiffEntry[], domain: string, a: ScanResult['dns'], b: ScanResult['dns']): void {
+function diffEmailAuth(stats: DiffStats, changes: DiffEntry[], domain: string, a: ScanResult['dns'], b: ScanResult['dns']): void {
   const ca = emailAuthChecks(a);
   const cb = emailAuthChecks(b);
   if (!ca || !cb) return;
+  stats.fields += cb.length;
   for (const after of cb) {
     const before = ca.find((x) => x.name === after.name);
     if (!before || (before.rating === after.rating && before.value === after.value)) continue;
@@ -207,12 +235,14 @@ function diffEmailAuth(changes: DiffEntry[], domain: string, a: ScanResult['dns'
 
 /** Emit added/removed entries for a single analytics ID set (e.g. GA4) on a domain. */
 function diffIdSet(
+  stats: DiffStats,
   changes: DiffEntry[],
   domain: string,
   label: string,
   idsA: string[] | undefined,
   idsB: string[] | undefined,
 ): void {
+  stats.fields++;
   const a = new Set(idsA ?? []);
   const b = new Set(idsB ?? []);
   for (const id of b) {
@@ -291,8 +321,13 @@ export async function cmdDiff(
   console.log(`  ${file1}  →  ${file2}`);
   console.log(`  ${changes.length} change(s): +${summary.added} added, -${summary.removed} removed, ~${summary.changed} changed\n`);
 
+  const comparedFooter = report.compared
+    ? `  compared ${report.compared.fields} field(s), ignored ${report.compared.ignored.length} volatile (${report.compared.ignored.join(', ')})`
+    : '';
+
   if (changes.length === 0) {
     console.log(c('green', '  No differences found.'));
+    if (comparedFooter) console.log(c('dim', comparedFooter));
     return;
   }
 
@@ -333,4 +368,6 @@ export async function cmdDiff(
     }
     console.log('');
   }
+
+  if (comparedFooter) console.log(c('dim', comparedFooter));
 }

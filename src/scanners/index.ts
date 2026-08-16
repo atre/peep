@@ -1,6 +1,6 @@
 import { readCapped } from '../fetch-guard.js';
 import { scanDns } from './dns.js';
-import { scanHttp } from './http.js';
+import { scanHttp, buildRequestHeaders } from './http.js';
 import { scanTls } from './tls.js';
 import { scanWhois } from './whois.js';
 import { scanHtml } from './html.js';
@@ -8,10 +8,12 @@ import { scanAnalytics, mergeAnalytics } from './analytics.js';
 import { scanAssets } from './assets.js';
 import { scanRobots } from './robots.js';
 import { scanContent } from './content.js';
-import { scanSecurity } from './security.js';
+import { scanSecurity, annotateHostDefaults } from './security.js';
 import { scanSeo } from './seo.js';
 import { scanTech } from './tech.js';
 import type { ScanResult, ScanningConfig, RobotsResult, PageAudit, HreflangAlternate, AnalyticsResult } from '../types.js';
+import { collectExposedIdentifiers } from '../utils.js';
+import { toFindings } from '../findings.js';
 
 export interface ScanOptions {
   config: ScanningConfig;
@@ -193,6 +195,9 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
     catch (e) { result.errors.push({ scanner: 'security', error: (e as Error).message }); }
   }
 
+  // Compute isNoindex from HTML meta robots + X-Robots-Tag header (needed by SEO scoring below)
+  result.isNoindex = containsNoindex(result.html?.metaRobots) || containsNoindex(xRobotsTag);
+
   // SEO scoring (uses html + robots results, no extra network requests)
   if (result.html || result.robots) {
     try {
@@ -211,6 +216,7 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
         // stayed true even when the HTTP fetch it depends on had errored).
         htmlScanned: result.html != null,
         robotsScanned: result.robots != null,
+        noindex: result.isNoindex,
       });
     }
     catch (e) { result.errors.push({ scanner: 'seo', error: (e as Error).message }); }
@@ -221,8 +227,12 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
     catch (e) { result.errors.push({ scanner: 'tech', error: (e as Error).message }); }
   }
 
-  // Compute isNoindex from HTML meta robots + X-Robots-Tag header
-  result.isNoindex = containsNoindex(result.html?.metaRobots) || containsNoindex(xRobotsTag);
+  if (result.security && result.tech) {
+    annotateHostDefaults(result.security.headers, result.tech.technologies.map((t) => t.name));
+  }
+
+  result.exposedIdentifiers = collectExposedIdentifiers(result);
+  result.findings = toFindings(result);
 
   // Multi-page scanning: fetch top N sitemap pages and merge form endpoints
   if (opts.pages && opts.pages > 0 && result.robots?.sitemapUrls.length) {
@@ -249,7 +259,8 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
   // also merged into correlation, same as the sitemap crawl above.
   if (opts.pageRoutes?.length) {
     try {
-      const { audits, analytics: pageAnalytics } = await auditPages(domain, opts.pageRoutes, result.robots, opts.config, result.analytics != null);
+      const siteHreflang = [...new Set((htmlBody ? extractHreflang(htmlBody) : []).map((h) => h.lang))];
+      const { audits, analytics: pageAnalytics } = await auditPages(domain, opts.pageRoutes, result.robots, opts.config, result.analytics != null, siteHreflang);
       result.pageAudits = audits;
       if (result.analytics) for (const a of pageAnalytics) mergeAnalytics(result.analytics, a);
       if (result.html) {
@@ -304,6 +315,7 @@ async function auditPages(
   robots: RobotsResult | null,
   config: ScanningConfig,
   wantAnalytics = true,
+  siteHreflang: string[] = [],
 ): Promise<{ audits: PageAudit[]; analytics: AnalyticsResult[] }> {
   const analytics: AnalyticsResult[] = [];
   const audits = await Promise.all(routes.map(async (route) => {
@@ -315,7 +327,7 @@ async function auditPages(
     try {
       const resp = await fetch(url, {
         signal: AbortSignal.timeout(config.timeout),
-        headers: { 'User-Agent': config.userAgent, Accept: 'text/html' },
+        headers: buildRequestHeaders(config),
         redirect: 'follow',
       });
       audit.statusCode = resp.status;
@@ -325,22 +337,26 @@ async function auditPages(
       const html = await readCapped(resp);
       const xRobotsTag = resp.headers.get('x-robots-tag');
       const pageHtml = scanHtml(html);
+      const isNoindex = containsNoindex(pageHtml.metaRobots) || containsNoindex(xRobotsTag);
       const seo = scanSeo({
         html: pageHtml,
         robots,
         hasHreflang: /<link[^>]+hreflang\s*=/i.test(html),
+        siteHreflang,
         statusCode: resp.status,
         finalScheme: (resp.url || url).startsWith('http://') ? 'http' : 'https',
         htmlScanned: true,
         robotsScanned: robots != null,
+        noindex: isNoindex,
       });
 
       audit.title = pageHtml.title;
       audit.htmlLang = pageHtml.htmlLang;
       audit.canonicalUrl = pageHtml.canonicalUrl;
-      audit.isNoindex = containsNoindex(pageHtml.metaRobots) || containsNoindex(xRobotsTag);
+      audit.isNoindex = isNoindex;
       audit.hreflang = extractHreflang(html);
       audit.seoScore = seo.score;
+      audit.seoEvaluated = seo.evaluated;
       audit.seoIssues = seo.checks.filter((ch) => ch.rating !== 'good');
       audit.formEndpoints = pageHtml.formEndpoints;
       if (wantAnalytics) analytics.push(scanAnalytics(html));
@@ -455,7 +471,7 @@ async function scanExtraPages(
     try {
       const resp = await fetch(url, {
         signal: AbortSignal.timeout(config.timeout),
-        headers: { 'User-Agent': config.userAgent, Accept: 'text/html' },
+        headers: buildRequestHeaders(config),
       });
       if (!resp.ok) return;
       const html = await readCapped(resp);

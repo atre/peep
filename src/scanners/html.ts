@@ -36,6 +36,7 @@ export function scanHtml(html: string): HtmlResult {
     comments: extractComments(html),
     jsonLd: extractJsonLd(html),
     formEndpoints: extractFormEndpoints(html),
+    emails: extractEmails(html),
   };
 }
 
@@ -233,6 +234,27 @@ function extractFormEndpoints(html: string): string[] {
     }
   }
   return [...endpoints];
+}
+
+const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+const MAX_EMAILS = 20;
+
+/** Email addresses exposed anywhere on the page — mailto: links and bare
+ *  addresses in body text (nav/footer contact info, unmasked support emails). */
+function extractEmails(html: string): string[] {
+  const emails = new Set<string>();
+  const mailtoRe = /mailto:([^"'?\s]+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = mailtoRe.exec(html)) !== null) {
+    if (m[1]) emails.add(decodeHtmlEntities(m[1]).toLowerCase());
+  }
+  const text = html.replace(/<[^>]+>/g, ' ');
+  let em: RegExpExecArray | null;
+  const bareRe = new RegExp(EMAIL_RE.source, 'g');
+  while ((em = bareRe.exec(text)) !== null) {
+    emails.add(em[0].toLowerCase());
+  }
+  return [...emails].slice(0, MAX_EMAILS);
 }
 
 function extractJsonLd(html: string): JsonLdData[] {

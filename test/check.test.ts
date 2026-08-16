@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateCheck, type CheckGateOptions } from '../src/commands/check.js';
+import { evaluateCheck, resolveExpectNoindex, type CheckGateOptions } from '../src/commands/check.js';
 import type { ScanResult } from '../src/types.js';
 
 function scan(over: Partial<ScanResult> = {}): ScanResult {
@@ -160,6 +160,19 @@ test('--require-seo fails when a --pages route lost the named check; root passin
   assert.match(r.failures[0], /"Open Graph" not passing on \/de\/products — Missing: og:image/);
 });
 
+test('--expect-hreflang exempts matching routes from the Hreflang gate', () => {
+  const hreflangWarn = { name: 'Hreflang', present: false, value: null, rating: 'warning' as const, detail: 'No hreflang' };
+  const audits = [page('/blog/a', { seoIssues: [hreflangWarn] })];
+  const exempt = evaluateCheck('x.com', scan({ pageAudits: audits }), {}, opts({
+    requiredSeoChecks: ['Hreflang'],
+    expectHreflang: [{ glob: '/blog/*', value: 'none' }],
+  }));
+  assert.deepEqual(exempt.failures, []);
+
+  const notExempt = evaluateCheck('x.com', scan({ pageAudits: audits }), {}, opts({ requiredSeoChecks: ['Hreflang'] }));
+  assert.equal(notExempt.failures.length, 1);
+});
+
 test('--min-seo applies to root and every route, naming the failing checks', () => {
   const r = evaluateCheck('example.com', scan({
     seo: { score: 60, checks: [ogBad], evaluated: 1, total: 12 },
@@ -181,4 +194,21 @@ test('SEO gates are noted, not failed, when html was excluded by --only', () => 
   const r = evaluateCheck('example.com', scan({ security: null }), {}, opts({ only: ['tls'], minSeoScore: 90 }));
   assert.deepEqual(r.failures, []);
   assert.ok(r.notes.some((n) => n.startsWith('SEO gates not evaluated')));
+});
+
+// ── resolveExpectNoindex: --stage pre-launch alias ──
+
+test('resolveExpectNoindex: --stage pre-launch behaves like --expect noindex', () => {
+  assert.equal(resolveExpectNoindex({ stage: 'pre-launch' }), true);
+});
+
+test('resolveExpectNoindex: existing aliases still work, and false by default', () => {
+  assert.equal(resolveExpectNoindex({ prelaunch: true }), true);
+  assert.equal(resolveExpectNoindex({ 'allow-noindex': true }), true);
+  assert.equal(resolveExpectNoindex({ expect: 'noindex' }), true);
+  assert.equal(resolveExpectNoindex({}), false);
+});
+
+test('resolveExpectNoindex: unknown --stage value throws, not a silent no-op', () => {
+  assert.throws(() => resolveExpectNoindex({ stage: 'staging' }), /unknown --stage value/);
 });

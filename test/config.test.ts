@@ -96,3 +96,17 @@ test('domain normalization in config', () => {
   assert.ok(c.fleet.domains.includes('another.com'), `Expected 'another.com' in ${c.fleet.domains}`);
   unlinkSync(configPath);
 });
+
+test('fleet.yaml domains fill in when .peeprc does not set fleet.domains', () => {
+  const c = loadConfig('/nonexistent/path/that/does/not/exist/.peeprc', { domains: ['a.com', 'b.com'], pages: [], locales: [], viewports: [] });
+  assert.deepEqual(c.fleet.domains, ['a.com', 'b.com']);
+});
+
+test('explicit .peeprc fleet.domains wins over fleet.yaml', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'peep-test-'));
+  const configPath = join(dir, '.peeprc');
+  writeFileSync(configPath, JSON.stringify({ fleet: { domains: ['x.com'] } }));
+  const c = loadConfig(configPath, { domains: ['a.com', 'b.com'], pages: [], locales: [], viewports: [] });
+  assert.deepEqual(c.fleet.domains, ['x.com']);
+  unlinkSync(configPath);
+});

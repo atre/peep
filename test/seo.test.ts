@@ -24,6 +24,7 @@ function html(over: Partial<HtmlResult> = {}): HtmlResult {
     comments: [],
     jsonLd: [{ type: 'WebSite', name: 'x', url: 'https://example.com', sameAs: [] }],
     formEndpoints: [],
+    emails: [],
     ...over,
   };
 }
@@ -142,4 +143,45 @@ test('no twitter:* tags at all → "missing", not "partially configured"', () =>
   const r = scanSeo({ html, robots: null, robotsScanned: false });
   const tw = r.checks.find((ch) => ch.name === 'Twitter Card')!;
   assert.equal(tw.rating, 'missing');
+});
+
+// ── noindex pages: Canonical URL / Hreflang / Structured Data don't apply ──
+
+test('noindex page: canonical/hreflang/JSON-LD not evaluated', () => {
+  const r = scanSeo({ html: html({ canonicalUrl: null, jsonLd: [] }), robots: robots(), statusCode: 200, noindex: true });
+  assert.equal(r.checks.find((c) => c.name === 'Canonical URL'), undefined);
+  assert.equal(r.checks.find((c) => c.name === 'Hreflang'), undefined);
+  assert.equal(r.checks.find((c) => c.name === 'Structured Data'), undefined);
+  assert.deepEqual(r.skipped, ['Canonical URL', 'Hreflang', 'Structured Data']);
+  assert.equal(r.score, 100);
+});
+
+// ── i18n site: an untranslated page's missing hreflang is not a bug ──
+
+test('site is i18n (siteHreflang set) but this page has no hreflang → distinct wording, still warning', () => {
+  const r = scanSeo({ html: html(), robots: robots(), hasHreflang: false, siteHreflang: ['en', 'de', 'x-default'], statusCode: 200 });
+  const check = r.checks.find((c) => c.name === 'Hreflang')!;
+  assert.equal(check.rating, 'warning');
+  assert.match(check.detail, /site is i18n \(root: en, de, x-default\) — this page has none/);
+});
+
+test('site is not i18n (no siteHreflang) → generic hreflang wording', () => {
+  const r = scanSeo({ html: html(), robots: robots(), hasHreflang: false, statusCode: 200 });
+  const check = r.checks.find((c) => c.name === 'Hreflang')!;
+  assert.equal(check.detail, 'No hreflang — add if site has multiple language versions');
+});
+
+// ── ±5 threshold tolerance: borderline title/description length stays "good" ──
+
+test('borderline title/description length stays good', () => {
+  const r = scanSeo({ html: html({ title: 'x'.repeat(63), metaDescription: 'x'.repeat(161) }), robots: robots(), statusCode: 200 });
+  const title = r.checks.find((c) => c.name === 'Title')!;
+  const desc = r.checks.find((c) => c.name === 'Meta Description')!;
+  assert.equal(title.rating, 'good');
+  assert.match(title.detail, /borderline/);
+  assert.equal(desc.rating, 'good');
+  assert.match(desc.detail, /borderline/);
+
+  const tooLong = scanSeo({ html: html({ title: 'x'.repeat(66) }), robots: robots(), statusCode: 200 });
+  assert.equal(tooLong.checks.find((c) => c.name === 'Title')!.rating, 'warning');
 });

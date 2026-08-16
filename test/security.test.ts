@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scanSecurity, extractCspFormProviders, extractReportEndpoints } from '../src/scanners/security.js';
+import { scanSecurity, extractCspFormProviders, extractReportEndpoints, annotateHostDefaults } from '../src/scanners/security.js';
 
 const GOOD_HEADERS: Record<string, string> = {
   'strict-transport-security': 'max-age=63072000; includeSubDomains; preload',
@@ -325,4 +325,19 @@ test('scanSecurity result carries reportEndpoints', () => {
 test('extractReportEndpoints preserves path case (report-uri.com slugs are case-sensitive)', () => {
   const r = extractReportEndpoints({ 'content-security-policy': "default-src 'self'; Report-URI https://Acme.report-uri.com/r/D/CSP/Enforce" });
   assert.deepEqual(r, ['acme.report-uri.com/r/D/CSP/Enforce']);
+});
+
+test('annotateHostDefaults: ACAO * on Cloudflare Pages is annotated as a host default', () => {
+  const r = scanSecurity({ 'access-control-allow-origin': '*' });
+  annotateHostDefaults(r.headers, ['Cloudflare Pages']);
+  const acao = r.headers.find((h) => h.name === 'Access-Control-Allow-Origin')!;
+  assert.match(acao.detail, /\(host default; override in _headers\)$/);
+});
+
+test('annotateHostDefaults: no matching tech → detail unchanged', () => {
+  const r = scanSecurity({ 'access-control-allow-origin': '*' });
+  const before = r.headers.find((h) => h.name === 'Access-Control-Allow-Origin')!.detail;
+  annotateHostDefaults(r.headers, []);
+  const after = r.headers.find((h) => h.name === 'Access-Control-Allow-Origin')!.detail;
+  assert.equal(after, before);
 });

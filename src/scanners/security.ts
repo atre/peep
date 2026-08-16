@@ -255,6 +255,23 @@ const COMMODITY_REPORT_HOSTS = ['a.nel.cloudflare.com'];
  * `host/path` (lowercased host, query dropped) so the same collector matches
  * across sites even when a per-site query token differs.
  */
+/** Hosts whose platform defaults set ACAO: * unless overridden — annotate
+ *  instead of reading as an app-level CORS misconfiguration. */
+const ACAO_HOST_DEFAULTS: Record<string, string> = {
+  'Cloudflare Pages': '_headers',
+};
+
+/** Annotate a permissive ACAO finding when it's a known host's platform
+ *  default (e.g. Cloudflare Pages) rather than an app-level choice. Mutates
+ *  in place — called after tech detection, which runs after security. */
+export function annotateHostDefaults(headers: SecurityHeader[], techNames: string[]): void {
+  const acao = headers.find((h) => h.name === 'Access-Control-Allow-Origin');
+  if (!acao) return;
+  const host = techNames.find((n) => ACAO_HOST_DEFAULTS[n]);
+  if (!host) return;
+  acao.detail += ` (host default; override in ${ACAO_HOST_DEFAULTS[host]})`;
+}
+
 export function extractReportEndpoints(headers: Record<string, string>): string[] {
   const urls: string[] = [];
 

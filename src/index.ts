@@ -2,6 +2,7 @@
 
 import { parseArgs, printHelp, printVersion } from './cli.js';
 import { loadConfig } from './config.js';
+import { loadFleetFile } from './fleet-config.js';
 import { cmdScan } from './commands/scan.js';
 import { cmdFleet } from './commands/fleet.js';
 import { cmdCorrelate } from './commands/correlate.js';
@@ -14,7 +15,14 @@ import { installDnsOverride } from './resolver.js';
 
 async function main(): Promise<void> {
   const { command, domains, flags } = parseArgs(process.argv);
-  const config = loadConfig(flags.config ? String(flags.config) : undefined);
+  const fleetFile = loadFleetFile(flags.fleet ? String(flags.fleet) : undefined);
+  const config = loadConfig(flags.config ? String(flags.config) : undefined, fleetFile);
+
+  // fleet.yaml `pages` becomes the default --pages routes for scan/check/report
+  // when the user didn't pass --pages explicitly — --pages always wins.
+  if (!flags.pages && fleetFile?.pages.length) {
+    flags.pages = fleetFile.pages.join(',');
+  }
 
   // Normalize all user-supplied domain inputs
   const normalizedDomains = domains.map(normalizeDomain);
@@ -36,6 +44,12 @@ async function main(): Promise<void> {
     config.scanning.dnsServer = flags.dns;
   }
   installDnsOverride(config.scanning.dnsServer);
+
+  // --lang <xx>: Accept-Language to send. Default (unset) sends none at all —
+  // matches Googlebot, avoids skewing a locale-default site toward EN.
+  if (typeof flags.lang === 'string' && flags.lang.length > 0) {
+    config.scanning.acceptLanguage = flags.lang;
+  }
 
   // Warn when a path/query/fragment is silently dropped — peep audits the apex
   // only, so scanning "example.com/de" would otherwise return apex data mislabeled

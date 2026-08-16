@@ -3,8 +3,43 @@ import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
-import { normalizeDomain, shortHash, md5, sha256, strippedPath, writeOutputFile, scoreColor, resolveScanningConfig, oneClickDnssecProvider, parsePagesFlag, isAdultCluster } from '../src/utils.js';
-import type { ScanningConfig } from '../src/types.js';
+import { normalizeDomain, shortHash, md5, sha256, strippedPath, writeOutputFile, scoreColor, resolveScanningConfig, oneClickDnssecProvider, parsePagesFlag, isAdultCluster, collectExposedIdentifiers } from '../src/utils.js';
+import type { ScanningConfig, ScanResult, DnsResult, RobotsResult } from '../src/types.js';
+
+function dns(over: Partial<DnsResult> = {}): DnsResult {
+  return { a: [], aaaa: [], mx: [], txt: [], ns: [], cname: [], googleVerification: null, microsoftVerification: null, facebookVerification: null, spf: null, dmarc: null, caa: [], ...over };
+}
+
+function robots(over: Partial<RobotsResult> = {}): RobotsResult {
+  return {
+    robotsTxt: null, robotsTxtHash: null, sitemapUrls: [], sitemapHash: null, affiliateRedirectPaths: [],
+    adsTxt: null, adsTxtHash: null, adsTxtPubIds: [], securityTxt: null, humansTxt: null, ...over,
+  } as never;
+}
+
+function scan(over: Partial<ScanResult> = {}): ScanResult {
+  return {
+    domain: 'example.com', url: 'https://example.com', timestamp: '', duration: 0, isNoindex: false,
+    dns: null, http: null, tls: null, whois: null, html: null, analytics: null, assets: null,
+    robots: null, content: null, security: null, seo: null, tech: null, errors: [],
+    ...over,
+  };
+}
+
+test('collectExposedIdentifiers: DMARC rua and security.txt Contact', () => {
+  const r = collectExposedIdentifiers(scan({
+    dns: dns({ dmarc: { raw: '', policy: 'none', subdomainPolicy: null, rua: ['a@b.com'], ruf: [], pct: null } }),
+    robots: robots({ securityTxtSummary: { contacts: ['mailto:sec@b.com'], expires: null, expiresInDays: null, policy: null, hasSignature: false } }),
+  }));
+  assert.deepEqual(r, [
+    { kind: 'email', value: 'a@b.com', source: 'DNS DMARC rua' },
+    { kind: 'email', value: 'sec@b.com', source: 'security.txt Contact' },
+  ]);
+});
+
+test('collectExposedIdentifiers: empty scan → empty array', () => {
+  assert.deepEqual(collectExposedIdentifiers(scan()), []);
+});
 
 test('oneClickDnssecProvider identifies Cloudflare NS (trailing dot tolerant)', () => {
   assert.equal(oneClickDnssecProvider(['kara.ns.cloudflare.com', 'rob.ns.cloudflare.com']), 'Cloudflare');

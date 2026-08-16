@@ -14,6 +14,10 @@ function resolverFor(dnsServer?: string): typeof dns {
   return resolver as unknown as typeof dns;
 }
 
+/** Common DKIM selectors worth probing — most senders use one of these rather
+ *  than a domain-specific value, so a positive hit is cheap to find. */
+export const DKIM_SELECTORS = ['default', 'google', 'resend', 'zoho', 'k1', 'selector1', 'selector2', 'mail', 'dkim', 's1', 's2', 'mandrill', 'mailjet', 'protonmail'];
+
 export async function scanDns(domain: string, dnsServer?: string): Promise<DnsResult> {
   const client = resolverFor(dnsServer);
   const result: DnsResult = {
@@ -29,6 +33,7 @@ export async function scanDns(domain: string, dnsServer?: string): Promise<DnsRe
     spf: null,
     dmarc: null,
     caa: [],
+    dkim: [],
   };
 
   const jobs = [
@@ -50,6 +55,15 @@ export async function scanDns(domain: string, dnsServer?: string): Promise<DnsRe
     client.resolveCaa(domain).then((r) => {
       result.caa = r.map(formatCaa).filter((s): s is string => s !== null);
     }).catch(() => {}),
+    ...DKIM_SELECTORS.map((selector) =>
+      client.resolveTxt(`${selector}._domainkey.${domain}`).then((r) => {
+        // p= must carry an actual key — a wildcard/parked-domain TXT record
+        // (some registrars answer any `*._domainkey` query) or a revoked key
+        // both present as `v=DKIM1; p=` with nothing after `p=`, and must not
+        // read as "DKIM configured".
+        const raw = r.map((t) => t.join('')).find((t) => /v=dkim1\b/i.test(t) && /p=[a-z0-9+/]/i.test(t));
+        if (raw) result.dkim!.push({ selector, raw });
+      }).catch(() => {})),
   ];
 
   await Promise.all(jobs);
