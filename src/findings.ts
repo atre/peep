@@ -26,19 +26,19 @@ export function toFindings(result: ScanResult): Finding[] {
   for (const h of result.security?.headers ?? []) {
     const severity = severityFor(h.rating);
     if (!severity) continue;
-    findings.push({ id: `sec:${domain}/${slug(h.name)}`, scope: 'site', severity, title: `${h.name}: ${h.detail}`, detail: h.detail });
+    findings.push({ id: `sec:${domain}/${slug(h.name)}`, scope: 'site', severity, title: `${h.name}: ${h.detail}`, detail: h.detail, hint: `peep scan ${domain} --only security` });
   }
 
   for (const ch of result.seo?.checks ?? []) {
     const severity = severityFor(ch.rating);
     if (!severity) continue;
-    findings.push({ id: `seo:${domain}/${slug(ch.name)}`, scope: 'site', severity, title: `${ch.name}: ${ch.detail}`, detail: ch.detail });
+    findings.push({ id: `seo:${domain}/${slug(ch.name)}`, scope: 'site', severity, title: `${ch.name}: ${ch.detail}`, detail: ch.detail, hint: `peep scan ${domain} --only seo` });
   }
 
   for (const ch of emailAuthChecks(result.dns) ?? []) {
     const severity = severityFor(ch.rating);
     if (!severity) continue;
-    findings.push({ id: `email:${domain}/${slug(ch.name)}`, scope: 'site', severity, title: `${ch.name}: ${ch.detail}`, detail: ch.detail });
+    findings.push({ id: `email:${domain}/${slug(ch.name)}`, scope: 'site', severity, title: `${ch.name}: ${ch.detail}`, detail: ch.detail, hint: `peep scan ${domain} --only dns` });
   }
 
   return findings;

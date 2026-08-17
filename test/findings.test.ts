@@ -36,10 +36,12 @@ test('missing security header → crit finding; DMARC p=none → warn finding; g
   assert.ok(sec, 'expected sec:example.com/content-security-policy');
   assert.equal(sec!.severity, 'crit');
   assert.equal(sec!.scope, 'site');
+  assert.equal(sec!.hint, 'peep scan example.com --only security');
 
   const email = findings.find((f) => f.id === 'email:example.com/dmarc');
   assert.ok(email, 'expected email:example.com/dmarc');
   assert.equal(email!.severity, 'warn');
+  assert.equal(email!.hint, 'peep scan example.com --only dns');
 
   assert.ok(!findings.some((f) => f.id.includes('strict-transport-security')), 'good header must not produce a finding');
   assert.ok(!findings.some((f) => f.id.includes('/spf')), 'good SPF must not produce a finding');
@@ -50,6 +52,7 @@ test('SEO warning check → warn finding; good SEO check produces nothing', () =
   const seo = findings.find((f) => f.id === 'seo:example.com/open-graph');
   assert.ok(seo);
   assert.equal(seo!.severity, 'warn');
+  assert.equal(seo!.hint, 'peep scan example.com --only seo');
   assert.ok(!findings.some((f) => f.id.includes('/title')));
 });
 

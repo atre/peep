@@ -402,11 +402,11 @@ treated as untrusted input:
 
 ## JSON output
 
-`-j` / `--format json` emits the full `ScanResult`. Two additive fields exist
+`-j` / `--format json` emits the full `ScanResult`. Additive fields exist
 for fleet tooling (pulse, brief) so every tool reads one shape:
 
 - `findings[]` — every non-good security header, SEO check and SPF/DMARC/DKIM
-  check as `{ id, scope: 'site', severity: 'crit'|'warn', title, detail }`,
+  check as `{ id, scope: 'site', severity: 'crit'|'warn', title, detail, hint }`,
   ids `sec:<domain>/<header>`, `seo:<domain>/<check>`, `email:<domain>/<spf|dmarc|dkim>`
   (`missing`/`bad` → `crit`, `warning` → `warn`).
 - `whois.expiresIn` — days until the registration expires (negative = expired,

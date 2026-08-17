@@ -339,6 +339,8 @@ export interface Finding {
   severity: 'crit' | 'warn';
   title: string;
   detail?: string;
+  /** Where to look — `peep scan <domain> --only security|seo|dns`. */
+  hint?: string;
 }
 
 export interface HreflangAlternate {

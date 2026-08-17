@@ -30,7 +30,12 @@ const BOOLEAN_SHORT = new Set(['j', 'q', 'v']);
 
 export function parseArgs(argv: string[]): CliArgs {
   const args = argv.slice(2);
-  const command = args[0] && !args[0].startsWith('-') ? args[0] : 'help';
+  // `peep --version` / `-v` == `peep version`; `--help` == `help` (fleet contract: --version works)
+  const first = args[0];
+  const command =
+    first === '--version' || first === '-v' ? 'version'
+    : first && !first.startsWith('-') ? first
+    : 'help';
   const domains: string[] = [];
   const flags: Record<string, string | boolean> = {};
 

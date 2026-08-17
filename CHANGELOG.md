@@ -27,7 +27,7 @@ Field-feedback round (storefront + personal site runs, 2026-08-15/16) plus fleet
 ### Fleet plumbing
 - **`fleet.yaml`** (`domains`, `pages`, `locales`, `viewports` — shared with looksy/texter/trusty) read from `./fleet.yaml` or `--fleet <path>`; `domains` default the fleet, `pages` default `--pages`. Explicit `.peeprc` / flags win.
 - **`--brief`**: red-only, ≤ 10 lines per domain, implies `-q`; on `scan`, `check`, `fleet`.
-- **`findings[]`** in every scan JSON in pulse's Finding shape (`scope: 'site'`, ids `sec:`/`seo:`/`email:`, `crit`/`warn`); **`whois.expiresIn`** (days) always present when whois ran.
+- **`findings[]`** in every scan JSON in pulse's Finding shape (`scope: 'site'`, ids `sec:`/`seo:`/`email:`, `crit`/`warn`); **`whois.expiresIn`** (days) always present when whois ran. Findings carry a `hint` (`peep scan <domain> --only security|seo|dns`) per the fleet contract. Note: `peep check` skips whois unless `--only whois` — domain-expiry consumers use `peep scan <domain> --only whois -j`.
 
 ## 0.2.0 — 2026-08-16
 Third-party account IDs, email OPSEC (SPF/DMARC/CAA), report collectors.

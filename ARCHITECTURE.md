@@ -48,11 +48,14 @@ peep/
 │   ├── config.ts             # .peeprc discovery, defaults, normalization
 │   ├── resolver.ts           # Process-wide dns.lookup() override (see below)
 │   ├── concurrency.ts        # Semaphore + mapConcurrent + rate limiting
-│   ├── utils.ts              # Hashing, colors, cluster helpers, output files
-│   ├── types.ts              # Shared result types for every scanner
+│   ├── utils.ts              # Hashing, colors, cluster helpers, output files, email-auth checks
+│   ├── types.ts              # Shared result types for every scanner (+ fleet Finding)
+│   ├── findings.ts           # ScanResult → findings[] in the fleet Finding shape (sec:/seo:/email:)
+│   ├── fleet-config.ts       # fleet.yaml (domains/pages/locales/viewports), shared with looksy/texter/trusty
+│   ├── fetch-guard.ts        # Outbound fetch guard (see below)
 │   ├── scanners/
 │   │   ├── index.ts          # Orchestrator — phase ordering, per-scanner isolation
-│   │   ├── dns.ts            # A/AAAA/MX/TXT/NS/CNAME/CAA, SPF + DMARC parsing
+│   │   ├── dns.ts            # A/AAAA/MX/TXT/NS/CNAME/CAA, SPF + DMARC parsing, DKIM selector probe
 │   │   ├── http.ts           # Status, headers, timing, redirect chain, cookies
 │   │   ├── tls.ts            # Issuer, SAN list, protocol, cipher, expiry
 │   │   ├── whois.ts          # Registrar/registrant, RDAP fallback
@@ -80,14 +83,14 @@ peep/
 │       ├── affiliate-networks.ts
 │       ├── ad-networks.ts
 │       └── analytics-ids.ts
-├── test/                     # node --test, 18 files
+├── test/                     # node --test, 27 files
 ├── .github/workflows/ci.yml
 ├── CLAUDE.md                 # AI assistant project instructions
 ├── ARCHITECTURE.md           # This file
 └── README.md
 ```
 
-**33 source files, ~6,600 lines, 291 tests.**
+**36 source files, ~10,800 lines, 427 tests.**
 
 ## Data flow
 
