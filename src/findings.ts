@@ -1,5 +1,5 @@
 import type { ScanResult, Finding } from './types.js';
-import { emailAuthChecks } from './utils.js';
+import { emailAuthChecks, isExplicitHttpTarget } from './utils.js';
 
 function slug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -35,7 +35,7 @@ export function toFindings(result: ScanResult): Finding[] {
     findings.push({ id: `seo:${domain}/${slug(ch.name)}`, scope: 'site', severity, title: `${ch.name}: ${ch.detail}`, detail: ch.detail, hint: `peep scan ${domain} --only seo` });
   }
 
-  for (const ch of emailAuthChecks(result.dns) ?? []) {
+  for (const ch of emailAuthChecks(result.dns, isExplicitHttpTarget(result)) ?? []) {
     const severity = severityFor(ch.rating);
     if (!severity) continue;
     findings.push({ id: `email:${domain}/${slug(ch.name)}`, scope: 'site', severity, title: `${ch.name}: ${ch.detail}`, detail: ch.detail, hint: `peep scan ${domain} --only dns` });

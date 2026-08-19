@@ -98,6 +98,12 @@ test('--lang de → lang flag parses', () => {
   assert.deepEqual(r.domains, ['example.com']);
 });
 
+test('--host mysite.com → host flag parses independently of the scan target', () => {
+  const r = parseArgs(args('scan', 'https://pr-123.vercel.app', '--host', 'mysite.com'));
+  assert.equal(r.flags.host, 'mysite.com');
+  assert.deepEqual(r.domains, ['https://pr-123.vercel.app']);
+});
+
 test('--expect-hreflang /blog/*:none → value parses', () => {
   const r = parseArgs(args('check', 'example.com', '--expect-hreflang', '/blog/*:none'));
   assert.equal(r.flags['expect-hreflang'], '/blog/*:none');

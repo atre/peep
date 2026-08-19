@@ -21,3 +21,13 @@ test('--lang de sets Accept-Language: de', () => {
   const headers = buildRequestHeaders({ ...defaultConfig, acceptLanguage: 'de' });
   assert.equal(headers['Accept-Language'], 'de');
 });
+
+test('default config sends no Host override', () => {
+  const headers = buildRequestHeaders(defaultConfig);
+  assert.equal('Host' in headers, false);
+});
+
+test('--host mysite.com sets the Host header for SNI/Host spoofing', () => {
+  const headers = buildRequestHeaders({ ...defaultConfig, hostOverride: 'mysite.com' });
+  assert.equal(headers['Host'], 'mysite.com');
+});

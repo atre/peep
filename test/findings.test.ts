@@ -59,3 +59,17 @@ test('SEO warning check → warn finding; good SEO check produces nothing', () =
 test('empty scan → no findings', () => {
   assert.deepEqual(toFindings(scan()), []);
 });
+
+test('explicit http:// target → no email-auth crit findings, even with missing SPF/DMARC', () => {
+  const findings = toFindings(scan({
+    url: 'http://localhost:9999',
+    dns: dns(), // spf: null, dmarc: null — on a real https target this is 2 crit findings
+  }));
+  assert.deepEqual(findings.filter((f) => f.id.startsWith('email:')), []);
+});
+
+test('real https target with the same missing SPF/DMARC still fires the crit findings (regression guard)', () => {
+  const findings = toFindings(scan({ dns: dns() }));
+  assert.ok(findings.some((f) => f.id === 'email:example.com/spf' && f.severity === 'crit'));
+  assert.ok(findings.some((f) => f.id === 'email:example.com/dmarc' && f.severity === 'crit'));
+});

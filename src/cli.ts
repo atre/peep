@@ -106,7 +106,9 @@ USAGE
 
 COMMANDS
   scan <domain...>        Scan one or more domains (full fingerprint report)
-  fleet                   Scan all domains in .peeprc fleet config
+  fleet                   Scan all domains in .peeprc fleet config, plus a
+                          deploy-gate rollup ("same check fails on N/10
+                          domains") using check's own gate flags below
   correlate [domain...]   Scan fleet + compute cross-site correlation matrix
                           (accepts domains as args, or uses .peeprc fleet config)
   classify [domain...]    Grey-red content classification (fleet if no args)
@@ -158,29 +160,31 @@ FLAGS
                           SEO/hreflang audit — use for i18n routes a homepage scan misses.
                           On check: each route must answer 2xx and not be noindex.
   -v                     Verbose output (show scanner timing, raw data,
-                          and hash values in correlation findings)
+                          hash values in correlation findings, and — on
+                          fleet — full per-domain deploy-gate failures below
+                          the "same check fails on N/10 domains" rollup)
   -q                     Quiet output (suppress per-domain lines, show summary only)
   --brief                Red-only output for gate/hook use: at most 10 lines
                           per domain — missing/bad checks, HTTP errors,
                           NOINDEX, scan errors. No good/warning lines.
                           Implies -q. Works on scan/check/fleet.
-  --cluster <name>       Cluster context for check command (clean|adult)
-  --min-score <n>        Minimum security score for check command (default: 50)
-  --require-security-txt Fail check if security.txt is absent
-  --require-email-auth   check only: fail unless SPF (-all/~all) and DMARC
+  --cluster <name>       Cluster context for check/fleet gate (clean|adult)
+  --min-score <n>        Minimum security score for check/fleet gate (default: 50)
+  --require-security-txt Fail check/fleet gate if security.txt is absent
+  --require-email-auth   check/fleet: fail unless SPF (-all/~all) and DMARC
                          (p=quarantine|reject) are published — spoofable domain
-  --min-seo <n>          check only: fail if the SEO score of the root page or
+  --min-seo <n>          check/fleet: fail if the SEO score of the root page or
                           any --pages route is below n
-  --require-seo <checks> check only: comma-separated SEO check names that must
+  --require-seo <checks> check/fleet: comma-separated SEO check names that must
                           pass on the root page and every --pages route, e.g.
                           "Open Graph,Canonical URL" — blocks a deploy where a
                           page lost its og:image
-  --expect-hreflang <g>  check only: comma-separated glob:none pairs, e.g.
+  --expect-hreflang <g>  check/fleet: comma-separated glob:none pairs, e.g.
                           "/blog/*:none" — routes matching the glob (trailing
                           * = prefix match) are expected to have no hreflang
                           (deliberately untranslated) and are exempted from
                           --require-seo Hreflang / --min-seo on that check
-  --expect <state>       check only: --expect noindex (aliases: --prelaunch,
+  --expect <state>       check/fleet: --expect noindex (aliases: --prelaunch,
                           --allow-noindex, --stage pre-launch)
                           converts a noindex failure into a PASS annotated
                           "noindex (declared pre-launch)" — for a site that's
@@ -189,7 +193,7 @@ FLAGS
                           passed explicitly every time — never a .peeprc
                           default — so it can't mask a forgotten noindex
                           after launch.
-  --stage pre-launch     check only: alias for --expect noindex. Only
+  --stage pre-launch     check/fleet: alias for --expect noindex. Only
                           "pre-launch" is accepted — anything else is a
                           fatal error, not a silent no-op.
   --dns <server>          Pin DNS resolution to this server (e.g. 1.1.1.1)
@@ -205,6 +209,13 @@ FLAGS
                           Googlebot) — a hardcoded en-US would skew a
                           locale-default site (e.g. a DE-default store)
                           toward its EN variant. Applies to --pages too.
+  --host <domain>         Override the TLS SNI hostname and HTTP Host header
+                          sent to the target, while still connecting to the
+                          literal target URL/domain — scan a preview URL
+                          (e.g. pr-123.vercel.app) and get TLS/security
+                          results as if it were the real domain. Independent
+                          of an explicit http:// target (which skips TLS
+                          entirely — see below): usable on any https scan.
   --fleet <path>          Read domains/pages from a fleet.yaml (default:
                           ./fleet.yaml if present) — schema shared with
                           looksy/texter/trusty: domains: [...], pages: [...],
@@ -270,6 +281,7 @@ EXAMPLES
   peep check example.com --cluster clean --prelaunch        # same, shorthand
   peep check example.com --pages /de,/en --require-seo "Open Graph"  # per-route gate
   peep scan example.com --dns 1.1.1.1   # bypass a stale OS negative-cache entry
+  peep scan https://pr-123.vercel.app --host example.com  # SNI/Host override
 `);
 }
 

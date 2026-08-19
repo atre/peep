@@ -23,6 +23,29 @@ interface SeoInput {
   /** True when the page is noindex (meta robots / X-Robots-Tag). Canonical URL,
    *  Hreflang, and Structured Data don't apply — they're skipped, not scored. */
   noindex?: boolean;
+  /** Path or full URL of the page being scored (e.g. '/privacy', '/products/x',
+   *  or 'https://example.com/privacy' — mirrors `PageAudit.route`). Used only
+   *  to detect legal/utility routes (privacy, terms, legal, imprint, cookies)
+   *  where Structured Data is skipped rather than scored: a privacy policy was
+   *  never going to earn a rich snippet, so `--min-seo` shouldn't force schema
+   *  onto it. Optional — when omitted, Structured Data scores normally. */
+  route?: string;
+}
+
+/** Path segments that mark a legal/utility page, where Structured Data isn't
+ *  realistically achievable and shouldn't be scored like a content page.
+ *  Anchored per-segment (not a substring match anywhere in the path) so
+ *  `/products/legal-eagle-brand` doesn't false-positive on "legal". */
+const LEGAL_ROUTE_SEGMENT = /^(privacy(-policy)?|terms(-of-service|-and-conditions)?|legal|imprint|cookies?(-policy)?)$/i;
+
+/** True when `route` (a path or full URL) has a legal/utility page segment. */
+function isLegalUtilityRoute(route: string): boolean {
+  let path = route;
+  if (/^https?:\/\//i.test(route)) {
+    try { path = new URL(route).pathname; } catch { /* not a real URL — fall through, treat as a raw path */ }
+  }
+  path = path.split(/[?#]/)[0] ?? '';
+  return path.split('/').some((seg) => LEGAL_ROUTE_SEGMENT.test(seg));
 }
 
 export function scanSeo(input: SeoInput): SeoResult {
@@ -34,6 +57,7 @@ export function scanSeo(input: SeoInput): SeoResult {
   const htmlScanned = input.htmlScanned ?? true;
   const robotsScanned = input.robotsScanned ?? true;
   const noindex = input.noindex ?? false;
+  const isLegalRoute = input.route ? isLegalUtilityRoute(input.route) : false;
 
   // ── HTML-derived checks — only evaluated when the html scanner ran ──
   if (htmlScanned) {
@@ -153,8 +177,12 @@ export function scanSeo(input: SeoInput): SeoResult {
       checks.push({ name: 'Viewport', present: false, value: null, rating: 'missing', detail: 'No viewport meta — not mobile-friendly (hurts mobile rankings)' });
     }
 
-    // ── JSON-LD Structured Data ── (skipped on noindex pages — doesn't apply)
-    if (!noindex) {
+    // ── JSON-LD Structured Data ── (skipped on noindex pages — doesn't apply;
+    // also skipped on legal/utility routes — /privacy, /terms, /legal,
+    // /imprint, /cookies — where a rich snippet was never realistically in
+    // play, so a bare score doesn't force schema onto a page where it'd be
+    // cargo-cult)
+    if (!noindex && !isLegalRoute) {
       const ldWeight = 10;
       maxPoints += ldWeight;
       if (html?.jsonLd?.length) {
@@ -230,8 +258,19 @@ export function scanSeo(input: SeoInput): SeoResult {
   // HTTP fetch both html and robots depend on failed) — that's "not evaluated",
   // not a perfect (nor a zero) score. Don't fabricate either.
   const score = maxPoints === 0 ? null : Math.round((points / maxPoints) * 100);
-  const skipped = noindex && htmlScanned ? ['Canonical URL', 'Hreflang', 'Structured Data'] : undefined;
-  return { score, checks, evaluated: checks.length, total: SEO_TOTAL_CHECKS, ...(skipped ? { skipped } : {}) };
+  let skipped: string[] | undefined;
+  let skipReasons: Record<string, string> | undefined;
+  if (noindex && htmlScanned) {
+    skipped = ['Canonical URL', 'Hreflang', 'Structured Data'];
+  } else if (isLegalRoute && htmlScanned) {
+    skipped = ['Structured Data'];
+    skipReasons = { 'Structured Data': 'legal/utility page — schema not expected' };
+  }
+  return {
+    score, checks, evaluated: checks.length, total: SEO_TOTAL_CHECKS,
+    ...(skipped ? { skipped } : {}),
+    ...(skipReasons ? { skipReasons } : {}),
+  };
 }
 
 /** Checks a full scan evaluates: 9 HTML-derived + 2 robots-derived + HTTPS. */

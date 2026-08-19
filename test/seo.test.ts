@@ -171,6 +171,54 @@ test('site is not i18n (no siteHreflang) → generic hreflang wording', () => {
   assert.equal(check.detail, 'No hreflang — add if site has multiple language versions');
 });
 
+// ── route-weighted JSON-LD scoring: legal/utility pages don't need schema ──
+
+test('legal-page route (/privacy) missing JSON-LD → Structured Data skipped, not penalized', () => {
+  const withoutRoute = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200 });
+  const r = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200, route: '/privacy' });
+  assert.equal(withoutRoute.score, 90, 'sanity: missing JSON-LD costs 10 points without route context');
+  assert.equal(r.checks.find((c) => c.name === 'Structured Data'), undefined, 'Structured Data must not be evaluated on a legal-page route');
+  assert.deepEqual(r.skipped, ['Structured Data']);
+  assert.deepEqual(r.skipReasons, { 'Structured Data': 'legal/utility page — schema not expected' });
+  assert.equal(r.score, 100, 'skipping the inapplicable check must not lower the score');
+});
+
+test('content-page route (/products/x) missing JSON-LD → still scored and penalized normally', () => {
+  const r = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200, route: '/products/x' });
+  const check = r.checks.find((c) => c.name === 'Structured Data');
+  assert.ok(check, 'Structured Data must still be evaluated on a content-page route');
+  assert.equal(check!.rating, 'missing');
+  assert.equal(r.skipped, undefined);
+  assert.equal(r.score, 90);
+});
+
+test('legal-page false positive guard: /products/legal-eagle-brand is not treated as a legal route', () => {
+  const r = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200, route: '/products/legal-eagle-brand' });
+  assert.ok(r.checks.find((c) => c.name === 'Structured Data'), 'a segment merely containing "legal" must not match');
+  assert.equal(r.skipped, undefined);
+  assert.equal(r.score, 90);
+});
+
+test('legal-page route variants (/terms, /legal, /imprint, /cookies, nested, full URL, trailing slash) all match', () => {
+  const routes = ['/terms', '/legal', '/imprint', '/cookies', '/cookie-policy', '/en/privacy', '/privacy/', 'https://example.com/terms-of-service'];
+  for (const route of routes) {
+    const r = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200, route });
+    assert.deepEqual(r.skipped, ['Structured Data'], `expected ${route} to be treated as a legal/utility route`);
+  }
+});
+
+test('legal-page route headline stays a plain score, not "(partial)" — mirrors noindex-skip behavior', () => {
+  const r = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200, route: '/privacy' });
+  assert.equal(r.evaluated, 11, 'one fewer check evaluated than the full 12');
+  assert.equal((r.skipped?.length ?? 0) + r.evaluated, r.total, 'evaluated + skipped must equal total so seoHeadline() does not misread this as partial');
+});
+
+test('noindex legal-page route → still only the noindex triple is skipped (no double-skip)', () => {
+  const r = scanSeo({ html: html({ jsonLd: [] }), robots: robots(), hasHreflang: true, statusCode: 200, route: '/privacy', noindex: true });
+  assert.deepEqual(r.skipped, ['Canonical URL', 'Hreflang', 'Structured Data']);
+  assert.equal(r.skipReasons, undefined, 'noindex already explains itself elsewhere — the route-specific reason is only for the non-noindex case');
+});
+
 // ── ±5 threshold tolerance: borderline title/description length stays "good" ──
 
 test('borderline title/description length stays good', () => {

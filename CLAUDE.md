@@ -21,7 +21,7 @@ Fleet OPSEC scanner: fingerprint detection, grey-red classification, cross-site 
 - `src/types.ts` — shared types for all scanner results
 
 ## Rules
-- NO runtime npm dependencies — zero-dep is a hard constraint
+- Deps are allowed when they earn their keep (pin them; prefer small, well-known packages) — zero-dep was never a hard rule, just today's state (see Stack)
 - Scanner results must match types in src/types.ts
 - Phase 1 scanners run parallel; phase 2 needs html output; phase 3 needs headers
 

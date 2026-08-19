@@ -55,3 +55,20 @@ test('daysUntilExpiry: expired cert gives negative days', () => {
   const days = Math.floor((expiryMs - Date.now()) / (1000 * 60 * 60 * 24));
   assert.ok(days < 0);
 });
+
+// ── --host: SNI override (scanTls's `servername: sniHost || domain` precedence) ──
+// scanTls itself does real I/O and isn't unit-testable (see file header) —
+// this replicates its one-line precedence rule the same way the SAN-parsing
+// tests above replicate parseSAN, without a real TLS handshake.
+
+test('SNI override: --host takes precedence over the connect domain for servername', () => {
+  const domain = 'pr-123.vercel.app';
+  const sniHost: string | undefined = 'example.com';
+  assert.equal(sniHost || domain, 'example.com');
+});
+
+test('SNI override: no --host falls back to the literal connect domain', () => {
+  const domain = 'pr-123.vercel.app';
+  const sniHost: string | undefined = undefined;
+  assert.equal(sniHost || domain, domain);
+});

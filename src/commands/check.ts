@@ -1,6 +1,6 @@
 import { scanDomain, validateScannerNames, expandScanners, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import type { PeepConfig, CheckResult, ScanResult } from '../types.js';
-import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus, parsePagesFlag, emailAuthChecks } from '../utils.js';
+import { c, getCluster, scoreColor, isAdultCluster, describeHttpStatus, isErrorStatus, parsePagesFlag, emailAuthChecks, dmarcFixSuggestion, isExplicitHttpTarget } from '../utils.js';
 import { seoHeadline } from './scan.js';
 
 const DEFAULT_SECURITY_THRESHOLD = 50;
@@ -163,13 +163,19 @@ export function evaluateCheck(
     if (!ran('dns')) {
       notes.push('email auth not checked (dns excluded by --only)');
     } else {
-      const checks = emailAuthChecks(scanResult.dns);
+      const checks = emailAuthChecks(scanResult.dns, isExplicitHttpTarget(scanResult));
       if (!checks) {
         notes.push('email auth not evaluated (dns scanner produced no result)');
       } else {
         for (const ch of checks) {
           if (ch.name === 'DKIM') continue; // informational only — probed selectors aren't exhaustive
-          if (ch.rating !== 'good') failures.push(`${ch.name} ${ch.rating === 'missing' ? 'missing' : 'weak'} — ${ch.detail}`);
+          if (ch.rating === 'good') continue;
+          let line = `${ch.name} ${ch.rating === 'missing' ? 'missing' : 'weak'} — ${ch.detail}`;
+          if (ch.name === 'DMARC') {
+            const fix = dmarcFixSuggestion(domain, scanResult);
+            if (fix) line += ` ${fix}`;
+          }
+          failures.push(line);
         }
       }
     }
@@ -199,32 +205,24 @@ export function resolveExpectNoindex(flags: Record<string, string | boolean>): b
   return flags.prelaunch === true || flags['allow-noindex'] === true || flags.stage === 'pre-launch' || String(flags.expect ?? '').toLowerCase() === 'noindex';
 }
 
-export async function cmdCheck(
-  domain: string,
-  config: PeepConfig,
-  flags: Record<string, string | boolean>,
-): Promise<void> {
+/**
+ * Parse the --cluster/--min-score/--require-security-txt/--expect(-noindex)/
+ * --only/--min-seo/--require-seo/--require-email-auth/--expect-hreflang flags
+ * shared by `check` into a `CheckGateOptions`. Pulled out so `fleet` can run
+ * the identical gate per domain (for the "same check fails on N/10 domains"
+ * rollup) without duplicating this parsing and drifting from `check`.
+ */
+export function buildCheckGateOptions(flags: Record<string, string | boolean>): CheckGateOptions {
   const clusterOverride = flags.cluster ? String(flags.cluster) : null;
   const rawScore = typeof flags['min-score'] === 'string' ? Number(flags['min-score']) : NaN;
   const securityThreshold = Number.isFinite(rawScore) ? rawScore : DEFAULT_SECURITY_THRESHOLD;
   const requireSecurityTxt = flags['require-security-txt'] === true;
-  const format = flags.format === 'json' || flags.j === true ? 'json' : 'text';
   // Explicit, per-invocation escape hatch for the deliberate pre-launch pattern
   // (site public for a payment-provider review but kept noindex until go-live).
   // Deliberately NOT readable from .peeprc — a config default could mask a
   // forgotten noindex after the site actually launches.
   const expectNoindex = resolveExpectNoindex(flags);
-  // --only narrows the gate's scan the same way it narrows `scan`. WHOIS is
-  // skipped by default (slow), but an explicit `--only whois` asks for it.
   const only = flags.only ? String(flags.only).split(',') : undefined;
-  if (only) {
-    const unknown = validateScannerNames(only);
-    if (unknown.length > 0) {
-      console.error(`Warning: unknown scanner(s) in --only: ${unknown.join(', ')}. Known: ${SELECTABLE_SCANNERS.join(', ')}`);
-    }
-  }
-  const skipWhois = !(only?.includes('whois') ?? false);
-  const { pageRoutes } = parsePagesFlag(flags);
   const rawSeo = typeof flags['min-seo'] === 'string' ? Number(flags['min-seo']) : NaN;
   const minSeoScore = Number.isFinite(rawSeo) ? rawSeo : null;
   const requiredSeoChecks = typeof flags['require-seo'] === 'string' ? String(flags['require-seo']).split(',') : [];
@@ -235,6 +233,38 @@ export async function cmdCheck(
         return { glob: (glob ?? '').trim(), value: (value ?? '').trim() as 'none' };
       }).filter((e) => e.glob && e.value === 'none')
     : [];
+
+  return {
+    clusterOverride,
+    securityThreshold,
+    requireSecurityTxt,
+    expectNoindex,
+    only,
+    minSeoScore,
+    requiredSeoChecks,
+    requireEmailAuth,
+    expectHreflang,
+  };
+}
+
+export async function cmdCheck(
+  domain: string,
+  config: PeepConfig,
+  flags: Record<string, string | boolean>,
+): Promise<void> {
+  const gateOpts = buildCheckGateOptions(flags);
+  const format = flags.format === 'json' || flags.j === true ? 'json' : 'text';
+  // --only narrows the gate's scan the same way it narrows `scan`. WHOIS is
+  // skipped by default (slow), but an explicit `--only whois` asks for it.
+  const only = gateOpts.only;
+  if (only) {
+    const unknown = validateScannerNames(only);
+    if (unknown.length > 0) {
+      console.error(`Warning: unknown scanner(s) in --only: ${unknown.join(', ')}. Known: ${SELECTABLE_SCANNERS.join(', ')}`);
+    }
+  }
+  const skipWhois = !(only?.includes('whois') ?? false);
+  const { pageRoutes } = parsePagesFlag(flags);
 
   const brief = flags.brief === true; // implies -q: no "Checking... done" progress line
   if (format === 'text' && !brief) {
@@ -254,18 +284,11 @@ export async function cmdCheck(
     console.log(' done');
   }
 
-  const { clusterName, failures, notes } = evaluateCheck(domain, scanResult, config.fleet.clusters, {
-    clusterOverride,
-    securityThreshold,
-    requireSecurityTxt,
-    expectNoindex,
-    only,
-    minSeoScore,
-    requiredSeoChecks,
-    requireEmailAuth,
-    expectHreflang,
-  });
+  const { clusterName, failures, notes } = evaluateCheck(domain, scanResult, config.fleet.clusters, gateOpts);
   const secScore = scanResult.security?.score ?? 0;
+  const minSeoScore = gateOpts.minSeoScore;
+  const expectNoindex = gateOpts.expectNoindex;
+  const securityThreshold = gateOpts.securityThreshold;
 
   const result: CheckResult = {
     domain,

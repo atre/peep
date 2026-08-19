@@ -133,6 +133,28 @@ test('check --require-email-auth: p=none is a failure (weak), -all + reject pass
   assert.deepEqual(ok.failures, []);
 });
 
+test('check --require-email-auth: DMARC failure carries a copy-pasteable fix with the literal record', () => {
+  const r = evaluateCheck('example.com', scan({ dns: dns({ spf: parseSpf('v=spf1 -all'), dmarc: parseDmarc('v=DMARC1; p=none') }) }), {}, gate);
+  const dmarcFailure = r.failures.find((f) => f.startsWith('DMARC'))!;
+  assert.match(dmarcFailure, /v=DMARC1; p=quarantine/, 'must contain the literal record to set');
+  assert.match(dmarcFailure, /rua=mailto:postmaster@example\.com/, 'falls back to a per-domain placeholder when no real contact is known');
+});
+
+test('check --require-email-auth: DMARC fix prefers a real known rua over the placeholder', () => {
+  const r = evaluateCheck('example.com', scan({ dns: dns({ dmarc: parseDmarc('v=DMARC1; p=none; rua=mailto:ops@example.com') }) }), {}, gate);
+  const dmarcFailure = r.failures.find((f) => f.startsWith('DMARC'))!;
+  assert.match(dmarcFailure, /rua=mailto:ops@example\.com/, 'reuses the address already published on the weak record');
+});
+
+test('check --require-email-auth: missing DMARC gets the same fix suggestion, no DMARC → nothing to fix once at reject', () => {
+  const missing = evaluateCheck('example.com', scan({ dns: dns() }), {}, gate);
+  const missingFailure = missing.failures.find((f) => f.startsWith('DMARC'))!;
+  assert.match(missingFailure, /v=DMARC1; p=quarantine/);
+
+  const good = evaluateCheck('example.com', scan({ dns: dns({ spf: parseSpf('v=spf1 -all'), dmarc: parseDmarc('v=DMARC1; p=reject') }) }), {}, gate);
+  assert.deepEqual(good.failures, []);
+});
+
 test('check --require-email-auth: dns excluded by --only → note, not failure', () => {
   const r = evaluateCheck('example.com', scan(), {}, { ...gate, only: ['http'] });
   assert.deepEqual(r.failures, []);
@@ -141,5 +163,26 @@ test('check --require-email-auth: dns excluded by --only → note, not failure',
 
 test('check without --require-email-auth ignores email posture entirely', () => {
   const r = evaluateCheck('example.com', scan({ dns: dns() }), {}, { ...gate, requireEmailAuth: false });
+  assert.deepEqual(r.failures, []);
+});
+
+// ── Local-target scan hygiene: explicit http:// targets suppress email-auth judgement ──
+
+test('emailAuthChecks: explicit http:// target → [] even though DNS ran and found nothing (missing SPF/DMARC)', () => {
+  assert.deepEqual(emailAuthChecks(dns(), true), []);
+});
+
+test('emailAuthChecks: explicit http:// target → [] even with real SPF/DMARC records present', () => {
+  const checks = emailAuthChecks(dns({ spf: parseSpf('v=spf1 -all'), dmarc: parseDmarc('v=DMARC1; p=reject') }), true);
+  assert.deepEqual(checks, []);
+});
+
+test('emailAuthChecks: default (no explicitHttpTarget arg) is unaffected — still evaluates SPF/DMARC', () => {
+  const checks = emailAuthChecks(dns());
+  assert.ok(checks && checks.length > 0);
+});
+
+test('check --require-email-auth on an explicit http:// target does not fail on missing SPF/DMARC', () => {
+  const r = evaluateCheck('localhost:9999', scan({ url: 'http://localhost:9999', dns: dns() }), {}, gate);
   assert.deepEqual(r.failures, []);
 });

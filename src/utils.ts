@@ -211,6 +211,29 @@ export function isErrorStatus(status: number | null | undefined): status is numb
   return typeof status === 'number' && status >= 400;
 }
 
+// ── Local-target scan hygiene (explicit http:// targets) ──
+
+/**
+ * Status-line reason used for TLS/WHOIS when the scanner is skipped outright
+ * because the user passed an explicit `http://` target (e.g. `localhost:9999`
+ * LAN/staging) — that target was never expected to have TLS or a registrable
+ * WHOIS domain in the first place, so a raw ENOTFOUND/"Invalid domain" error
+ * would just be noise. Shared by the scanner gate (src/scanners/index.ts) and
+ * the text renderer (src/commands/scan.ts) so the two stay in lockstep.
+ */
+export const EXPLICIT_HTTP_TARGET_SKIP_REASON = 'skipped (explicit http:// target)';
+
+/**
+ * True when a scan's target URL is an explicit `http://` one — set together
+ * with `ScanningConfig.scheme` in src/index.ts (only when every domain arg on
+ * the command line started with `http://`). Derived from the per-result `url`
+ * field rather than threading `ScanningConfig` through every caller (findings,
+ * text renderers, check gates) that only has a `ScanResult` in hand.
+ */
+export function isExplicitHttpTarget(result: Pick<ScanResult, 'url'>): boolean {
+  return result.url.startsWith('http://');
+}
+
 // ── Email authentication (SPF / DMARC) ──
 
 export interface EmailAuthCheck {
@@ -225,9 +248,17 @@ export interface EmailAuthCheck {
  * Judge a domain's SPF + DMARC posture from the dns scanner output. Returns
  * null when the dns scanner didn't run (or is a pre-0.2 JSON without the
  * fields) — "unknown" must not read as "missing".
+ *
+ * `explicitHttpTarget` (true for a `localhost:PORT`-shaped explicit http://
+ * target) returns `[]` instead — evaluated-and-clean, not "didn't run" — so a
+ * bare local target doesn't fire crit SPF/DMARC findings for DNS it was never
+ * expected to have. Deliberately not folded into the `!dns` null case above:
+ * the DNS scanner may still have run and returned real (empty) data; this is
+ * about suppressing the derived judgement, not the scan itself.
  */
-export function emailAuthChecks(dns: DnsResult | null | undefined): EmailAuthCheck[] | null {
+export function emailAuthChecks(dns: DnsResult | null | undefined, explicitHttpTarget = false): EmailAuthCheck[] | null {
   if (!dns || dns.spf === undefined || dns.dmarc === undefined) return null;
+  if (explicitHttpTarget) return [];
   const out: EmailAuthCheck[] = [];
 
   const spf = dns.spf;
@@ -278,6 +309,38 @@ export function emailAuthChecks(dns: DnsResult | null | undefined): EmailAuthChe
   return out;
 }
 
+/**
+ * Copy-pasteable DMARC remediation for `check`'s ✗ line — the exact record to
+ * publish at `_dmarc.<domain>` to clear a non-good DMARC rating. Null when
+ * DMARC is already good (p=reject/quarantine at pct=100 — nothing to fix) or
+ * the dns scanner didn't run.
+ *
+ * The rua mailbox prefers a real address already surfaced by the scan (an
+ * existing DMARC rua even on the weak record being replaced, then
+ * security.txt/CAA contacts) over a guessed `postmaster@<domain>` — still
+ * copy-pasteable per-domain, but not fabricated when better data exists.
+ */
+export function dmarcFixSuggestion(domain: string, r: ScanResult): string | null {
+  const dmarc = r.dns?.dmarc;
+  if (r.dns === undefined || r.dns === null) return null; // dns scanner didn't run
+
+  const identifiers = collectExposedIdentifiers(r);
+  const bySource = (source: string) => identifiers.find((i) => i.source === source)?.value;
+  const rua = bySource('DNS DMARC rua') ?? bySource('security.txt Contact') ?? bySource('DNS CAA iodef') ?? bySource('HTML mailto') ?? `postmaster@${domain}`;
+
+  if (!dmarc) {
+    return `→ fix: set _dmarc TXT "v=DMARC1; p=quarantine; rua=mailto:${rua}"`;
+  }
+  if (dmarc.policy === 'reject' || dmarc.policy === 'quarantine') {
+    if (dmarc.pct !== null && dmarc.pct < 100) {
+      return `→ fix: set _dmarc TXT "v=DMARC1; p=${dmarc.policy}; pct=100; rua=mailto:${rua}"`;
+    }
+    return null; // good — nothing to fix
+  }
+  // p=none, or malformed/missing p= tag — either way, quarantine is the safe next step
+  return `→ fix: set _dmarc TXT "v=DMARC1; p=quarantine; rua=mailto:${rua}"`;
+}
+
 export interface ExposedIdentifier {
   kind: 'email';
   value: string;
@@ -318,4 +381,44 @@ export function collectExposedIdentifiers(r: ScanResult): ExposedIdentifier[] {
   for (const email of r.html?.emails ?? []) add(email, 'HTML mailto');
 
   return out;
+}
+
+/**
+ * Reduce one `evaluateCheck()` failure string (see commands/check.ts) down to
+ * a stable rollup key: a check `name` plus, for per-route SEO/route checks,
+ * the `route` it fired on. Used by `fleet` to group "same check fails on
+ * N/10 domains" instead of repeating the identical line per domain.
+ *
+ * Deliberately pattern-matches the fixed set of failure strings evaluateCheck
+ * produces rather than changing its return shape (`failures: string[]`) —
+ * that shape is asserted on directly by ~30 check.test.ts cases. A failure
+ * shape evaluateCheck doesn't recognize still rolls up fine: it falls back to
+ * using the full text as the key, just without route-stripping.
+ */
+export function classifyCheckFailure(failure: string): { route: string | null; name: string } {
+  let m = failure.match(/^SEO check "([^"]+)" not passing on (\S+) —/);
+  if (m) return { route: m[2], name: m[1] };
+
+  m = failure.match(/^SEO score \d+\/100 on (\S+) is below --min-seo/);
+  if (m) return { route: m[1], name: 'SEO score below --min-seo' };
+
+  m = failure.match(/^Route (\S+) (?:returned HTTP \d+|unreachable)$/);
+  if (m) return { route: m[1], name: 'Route unreachable' };
+
+  m = failure.match(/^Route (\S+) is NOINDEX/);
+  if (m) return { route: m[1], name: 'Route NOINDEX' };
+
+  if (/^HTTP \d+ —/.test(failure)) return { route: null, name: 'Site unreachable (HTTP error)' };
+  if (failure.startsWith('Adult content detected')) return { route: null, name: 'Adult content on clean cluster' };
+  if (failure.startsWith('Site is NOINDEX')) return { route: null, name: 'Site NOINDEX' };
+  if (failure.startsWith('Security score')) return { route: null, name: 'Security score below threshold' };
+  if (failure.startsWith('security.txt not found')) return { route: null, name: 'security.txt missing' };
+
+  m = failure.match(/^(SPF|DMARC|DKIM) (missing|weak) —/);
+  if (m) return { route: null, name: `${m[1]} ${m[2]}` };
+
+  m = failure.match(/^Critical scanner error \[(\w+)\]:/);
+  if (m) return { route: null, name: `Critical scanner error [${m[1]}]` };
+
+  return { route: null, name: failure };
 }

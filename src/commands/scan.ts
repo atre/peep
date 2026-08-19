@@ -1,7 +1,7 @@
 import { scanDomain, validateScannerNames, SELECTABLE_SCANNERS } from '../scanners/index.js';
 import { analyticsVendors } from '../scanners/analytics.js';
 import type { PeepConfig, ScanResult, OutputFormat, RobotsTxtSummary, SecurityTxtSummary, SeoResult, PageAudit } from '../types.js';
-import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster, describeHttpStatus, isErrorStatus, emailAuthChecks } from '../utils.js';
+import { c, formatDuration, severityColor, getCluster, writeOutputFile, scoreColor, resolveScanningConfig, parsePagesFlag, oneClickDnssecProvider, isAdultCluster, describeHttpStatus, isErrorStatus, emailAuthChecks, isExplicitHttpTarget, EXPLICIT_HTTP_TARGET_SKIP_REASON } from '../utils.js';
 
 export async function cmdScan(
   domains: string[],
@@ -104,12 +104,25 @@ export function seoHeadline(seo: SeoResult | null): string {
 }
 
 /** WHOIS section replacement when the scanner was selected/enabled but produced
- *  no usable data — `--only whois` on a scan that failed used to print nothing. */
+ *  no usable data — `--only whois` on a scan that failed used to print nothing.
+ *  A deliberate skip (explicit http:// target) reads as "skipped (...)",
+ *  distinct from a real lookup failure reading as "unavailable (...)". */
 export function whoisStatusLine(result: ScanResult, only?: string[]): string | null {
   if (only && !only.includes('whois')) return null;
   if (result.whois && (result.whois.registrar || result.whois.createdDate || result.whois.expiryDate)) return null;
   const reason = result.errors.find((e) => e.scanner === 'whois')?.error ?? 'no data found';
+  if (reason === EXPLICIT_HTTP_TARGET_SKIP_REASON) return `WHOIS: ${reason}`;
   return `WHOIS: unavailable (${reason})`;
+}
+
+/** TLS section replacement when the scanner was deliberately skipped — mirrors
+ *  whoisStatusLine's convention. Only fires for the skip reason (not other TLS
+ *  failures, which stay silent in text output as before — see errCount). */
+export function tlsStatusLine(result: ScanResult, only?: string[]): string | null {
+  if (only && !only.includes('tls')) return null;
+  if (result.tls) return null;
+  const reason = result.errors.find((e) => e.scanner === 'tls')?.error;
+  return reason === EXPLICIT_HTTP_TARGET_SKIP_REASON ? `TLS: ${reason}` : null;
 }
 
 /** Red-only summary for gate/hook use: at most 10 lines — header (domain +
@@ -132,7 +145,7 @@ export function briefLines(r: ScanResult): string[] {
   for (const h of r.security?.headers ?? []) {
     if (isRed(h.rating)) details.push(`  - ${h.name}: ${h.detail}`);
   }
-  for (const ch of emailAuthChecks(r.dns) ?? []) {
+  for (const ch of emailAuthChecks(r.dns, isExplicitHttpTarget(r)) ?? []) {
     if (isRed(ch.rating)) details.push(`  - ${ch.name}: ${ch.detail}`);
   }
   for (const e of r.errors) {
@@ -179,7 +192,7 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
     if (result.dns.txt.length) console.log(`    TXT: ${result.dns.txt.join(', ')}`);
     if (result.dns.cname.length) console.log(`    CNAME: ${result.dns.cname.join(', ')}`);
     if (result.dns.caa?.length) console.log(`    CAA: ${result.dns.caa.join(', ')}`);
-    const email = emailAuthChecks(result.dns);
+    const email = emailAuthChecks(result.dns, isExplicitHttpTarget(result));
     if (email) {
       for (const e of email) {
         const icon = e.rating === 'good' ? c('green', '+') : e.rating === 'missing' || e.rating === 'bad' ? c('red', '-') : c('yellow', '~');
@@ -226,6 +239,9 @@ function printScanResult(result: ScanResult, config: PeepConfig, verbose = false
       else expiryStr = c('green', `${days} days`);
       console.log(`    Expires in: ${expiryStr}`);
     }
+  } else {
+    const line = tlsStatusLine(result, only);
+    if (line) console.log(`  ${c('dim', line)}`);
   }
 
   // WHOIS

@@ -11,11 +11,10 @@ _All P0–P4 items from the 2026-08-15/16 field runs shipped in 0.3.0 — see CH
 ## Fleet review 2026-08-17 (hub TOOLS.md Round 4) — this section is the queue
 
 Verdict: **USED** (43 real calls / 6 sessions / 30d, `/opsec-check` ×2; FEEDBACK 6 use-sections). All 0.3.0 accepts verified 2026-08-17.
-- [ ] **Shared account-id correlation** — Formspree form id / Calendly handle / GA-GTM already covered → same third-party account id on ≥ 2 domains = HIGH finding in `correlate`; why: FEEDBACK:59 (the leak that de-anonymises a store) · accept: fixture two ScanResults sharing `formspree:abc` → one HIGH `shared-account-id`. `pull/gold`
-- [ ] **DMARC fix string on the ✗ line** — `✗ DMARC p=none → set v=DMARC1; p=quarantine; rua=mailto:…`; why: FEEDBACK:61 · accept: text output contains the literal record. `pull/gold`
+_Shared account-id correlation, DMARC fix string, fleet roll-up, route-weighted JSON-LD scoring, repo shape, and CLAUDE.md:24 shipped in 0.4.0 — see CHANGELOG.md._
 - [ ] **`--pages all` via sitemap** — reuse looksy's `sitemap.ts` (copy until clikit); why: FEEDBACK:63. `pull` (after looksy ships it)
-- [ ] **fleet roll-up** — `fleet` prints "same check fails on N/10 domains" block; why: FEEDBACK:62. `pull`
-- [ ] **route-weighted JSON-LD scoring** — product/article routes weigh structured data, legal pages don't; why: FEEDBACK:60. `pull`
-- [ ] **Repo shape** — add `skills/opsec-check/SKILL.md` (canonical) and symlink `~/.claude/skills/opsec-check` to it (today a loose copy from Aug 6); Stop hook `snuff --hook` in `.claude/settings.json`; `--version` fixed 2026-08-17. `hygiene`
-- [ ] **CLAUDE.md:24 "zero-dep is a hard constraint"** → align with hub contract (deps allowed when they earn their keep). `hygiene`
 Parked: `findings[]` consumers (pulse `--opsec`, domain expiry) — pulse-side, gated on pulse dogfooding. Rule: no new emitter until a consuming test exists.
+
+## Memory sanity-check 2026-08-18
+_Local-target scan hygiene + `--host` shipped in 0.4.0 — see CHANGELOG.md._
+Parked: offensive-recon roadmap (proxy/UA rotation, JA3, crt.sh/Shodan pivots, subdomain enum, `peep discover`, STIX/MISP export — 20 tasks, memory `project_offensive_roadmap`). Zero shipped across 0.2.0/0.3.0; both releases went all-defensive (account-id/DMARC/SEO correlation) driven by real dogfooding instead. Needs an explicit go/drop call before it's live backlog again — not touching until then.

@@ -51,6 +51,15 @@ async function main(): Promise<void> {
     config.scanning.acceptLanguage = flags.lang;
   }
 
+  // --host <domain>: TLS SNI + HTTP Host header override — the scan still
+  // connects to the literal target URL/domain, only what's presented as
+  // SNI/Host changes. Independent of the explicit http:// skip logic above:
+  // usable on a normal https scan (e.g. a preview URL scanned as if it were
+  // the real production domain).
+  if (typeof flags.host === 'string' && flags.host.length > 0) {
+    config.scanning.hostOverride = flags.host;
+  }
+
   // Warn when a path/query/fragment is silently dropped — peep audits the apex
   // only, so scanning "example.com/de" would otherwise return apex data mislabeled
   // as a /de audit. (stderr, so JSON output on stdout stays clean.)

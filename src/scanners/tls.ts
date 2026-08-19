@@ -2,13 +2,18 @@ import * as tls from 'node:tls';
 import type { TlsResult } from '../types.js';
 import { withResolverWarning } from '../resolver.js';
 
-export async function scanTls(domain: string, timeout: number): Promise<TlsResult> {
+/**
+ * @param sniHost --host override: presented as the TLS SNI `servername` while
+ *   still connecting to the literal `domain` — scan a preview URL and see the
+ *   cert/TLS posture as if it were the real production domain.
+ */
+export async function scanTls(domain: string, timeout: number, sniHost?: string): Promise<TlsResult> {
   return new Promise((resolve, reject) => {
     const socket = tls.connect(
       {
         host: domain,
         port: 443,
-        servername: domain,
+        servername: sniHost || domain,
         rejectUnauthorized: false,
         timeout,
       },

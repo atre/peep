@@ -12,7 +12,7 @@ import { scanSecurity, annotateHostDefaults } from './security.js';
 import { scanSeo } from './seo.js';
 import { scanTech } from './tech.js';
 import type { ScanResult, ScanningConfig, RobotsResult, PageAudit, HreflangAlternate, AnalyticsResult } from '../types.js';
-import { collectExposedIdentifiers } from '../utils.js';
+import { collectExposedIdentifiers, EXPLICIT_HTTP_TARGET_SKIP_REASON } from '../utils.js';
 import { toFindings } from '../findings.js';
 
 export interface ScanOptions {
@@ -124,12 +124,20 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
     );
   }
 
+  // An explicit http:// target (e.g. `localhost:9999`) was never expected to
+  // have TLS at all — attempting the connection just produces a raw ENOTFOUND.
+  // Skip outright and record why, same convention as WHOIS below.
+  const explicitHttpTarget = opts.config.scheme === 'http';
   if (should('tls')) {
-    phase1.push(
-      scanTls(domain, opts.config.timeout)
-        .then((r) => { result.tls = r; })
-        .catch((e) => { result.errors.push({ scanner: 'tls', error: (e as Error).message }); }),
-    );
+    if (explicitHttpTarget) {
+      result.errors.push({ scanner: 'tls', error: EXPLICIT_HTTP_TARGET_SKIP_REASON });
+    } else {
+      phase1.push(
+        scanTls(domain, opts.config.timeout, opts.config.hostOverride)
+          .then((r) => { result.tls = r; })
+          .catch((e) => { result.errors.push({ scanner: 'tls', error: (e as Error).message }); }),
+      );
+    }
   }
 
   // An explicit `--only whois` outranks `scanning.whoisEnabled: false` in .peeprc —
@@ -138,11 +146,17 @@ export async function scanDomain(domain: string, opts: ScanOptions): Promise<Sca
   // but then says so instead of leaving the section silently absent.
   const whoisExplicit = opts.only?.includes('whois') ?? false;
   if (should('whois') && !opts.skipWhois && (opts.config.whoisEnabled || whoisExplicit)) {
-    phase1.push(
-      scanWhois(domain)
-        .then((r) => { result.whois = r; })
-        .catch((e) => { result.errors.push({ scanner: 'whois', error: (e as Error).message }); }),
-    );
+    // Same reasoning as TLS above: `localhost:9999` is not a registrable
+    // domain — WHOIS would otherwise fail raw with "Invalid domain for WHOIS".
+    if (explicitHttpTarget) {
+      result.errors.push({ scanner: 'whois', error: EXPLICIT_HTTP_TARGET_SKIP_REASON });
+    } else {
+      phase1.push(
+        scanWhois(domain)
+          .then((r) => { result.whois = r; })
+          .catch((e) => { result.errors.push({ scanner: 'whois', error: (e as Error).message }); }),
+      );
+    }
   }
 
   if (should('robots')) {
@@ -348,6 +362,7 @@ async function auditPages(
         htmlScanned: true,
         robotsScanned: robots != null,
         noindex: isNoindex,
+        route,
       });
 
       audit.title = pageHtml.title;

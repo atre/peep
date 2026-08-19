@@ -278,8 +278,15 @@ export interface SeoResult {
    *  as a plain "/100". */
   total: number;
   /** Check names deliberately not evaluated because the page is noindex
-   *  (Canonical URL / Hreflang / Structured Data don't apply). */
+   *  (Canonical URL / Hreflang / Structured Data don't apply), or because the
+   *  page is a legal/utility route where a given check doesn't apply (e.g.
+   *  Structured Data on /privacy). */
   skipped?: string[];
+  /** Check name → human-readable reason, for entries in `skipped` whose reason
+   *  isn't already self-evident from context (the noindex skip is explained
+   *  elsewhere by callers; this covers newer skip reasons like route-based
+   *  ones). Additive and optional — absent when nothing needs explaining. */
+  skipReasons?: Record<string, string>;
 }
 
 // ── Technology Detection ──
@@ -440,6 +447,12 @@ export interface ScanningConfig {
    *  no Accept-Language at all — matches Googlebot and avoids skewing a
    *  locale-default site (e.g. a DE-default store) toward its EN variant. */
   acceptLanguage?: string;
+  /** --host <domain>: hostname presented as TLS SNI and the HTTP Host header,
+   *  while the scan still connects to the literal target URL/domain — lets a
+   *  preview URL (pr-123.vercel.app) be scanned as if it were the real
+   *  production domain. Independent of `scheme` — usable on a normal https
+   *  scan, not just the explicit http:// local-target case. */
+  hostOverride?: string;
 }
 
 // ── Diff ──

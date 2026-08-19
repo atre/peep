@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 — 2026-08-18
+
+Fleet review response (hub TOOLS.md Round 4, 2026-08-17) plus a memory sanity-check fix (2026-08-18): correlation completeness, fleet-wide rollups, route-aware SEO scoring, and local-target scan hygiene.
+
+### Breaking
+- **`peep fleet --format json` / `peep correlate --format json` top-level shape changed**: was a bare `ScanResult[]` array, now `{ results, check: { results, rollup } }` — `results` is the old array (unchanged), `check.results` is per-domain deploy-gate pass/fail, `check.rollup` is the new cross-domain rollup. Any JSON consumer indexing/iterating the array directly needs to read `.results` instead.
+
+### Wrong or misleading output fixed
+- **`fleet`/`correlate` silently dropped `--pages`/`--page-routes`** — per-page markup (e.g. a Formspree id only present on `/contact`) was invisible to `shared-form-endpoint`/`fleet-wide-form-endpoint` correlation unless the homepage itself carried it. `buildFleetScanOptions()` now forwards pages/routes to every domain scan.
+- **Structured Data no longer scored on legal/utility pages** (`/privacy`, `/terms`, `/legal`, `/imprint`, `/cookies`, case-insensitive, segment-anchored) — `isLegalUtilityRoute()` gates the check out via the existing `seo.skipped` pattern, with a new `SeoResult.skipReasons` map explaining why (`"legal/utility page — schema not expected"`).
+- **Local (`http://`) targets no longer read as broken or spoofable** — TLS and WHOIS now print `skipped (explicit http:// target)` instead of throwing/failing raw, and DNS-derived SPF/DMARC/CAA crit findings (meaningless for a target with no real DNS) are suppressed for explicit `http://` scans.
+
+### Ergonomics
+- **Copy-pasteable DMARC fix**: `check`'s DMARC ✗ line now appends `→ fix: set _dmarc TXT "v=DMARC1; p=quarantine; rua=mailto:…"`, preferring a real discovered contact address (existing rua, security.txt, CAA iodef, HTML mailto) over a placeholder.
+- **`--host <domain>`**: overrides the TLS SNI hostname and HTTP `Host` header, so a preview/staging URL (`https://pr-123.vercel.app`) can be scanned *as* the real domain. Node's global `fetch()` drops a `Host` header (WHATWG forbidden-header-name), so this path uses a raw `node:http`/`node:https` fetch — only when `--host` is set; the default fetch path is untouched. Known gap: `robots.ts`/`assets.ts` don't yet honor `--host` (tracked in FEEDBACK.md).
+
+### Fleet plumbing
+- **Deploy-gate rollup**: `fleet` now runs the same `evaluateCheck()` gate as `check`, per domain, and rolls up a failure repeated across domains into one line — `same check fails on 6/10 domains: DMARC missing`, or route-scoped `/contact/: Title on 4/10 domains` — instead of repeating it per domain. Default text shows the rollup only; `-v` adds full per-domain detail; `--format json` always includes both (see Breaking, above).
+
+### Repo hygiene
+- Canonical `skills/opsec-check/SKILL.md` refreshed to 0.3.0 (`--lang`/`--brief`/`--fleet`, `--min-seo`/`--require-seo`/`--expect-hreflang`, `--stage pre-launch`, DKIM, per-page `SEO n/12 evaluated`, `findings[]`/`hint`, noindex-aware skip, 40+ vendor-id correlation signals); `~/.claude/skills/opsec-check` now symlinks to it instead of carrying a stale loose copy.
+- `CLAUDE.md`'s dependency line reworded: zero-dep was never a hard rule, just today's state — deps are allowed when they earn their keep (pin them, prefer small well-known packages). The Stack section's "Zero runtime npm deps" line is untouched; `dependencies` is still absent from `package.json`.
+
 ## 0.3.0 — 2026-08-17
 
 Field-feedback round (storefront + personal site runs, 2026-08-15/16) plus fleet plumbing.
